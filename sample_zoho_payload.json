@@ -1,0 +1,9 @@
+{
+  "visitor": {
+    "id": "visitor_123",
+    "name": "Test Visitor",
+    "message": "Hi, I want to know the status of my order #9876. It is urgent."
+  },
+  "timestamp": "2025-11-20T12:00:00Z",
+  "channel": "web"
+}

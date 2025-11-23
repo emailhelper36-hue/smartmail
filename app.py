@@ -1,4 +1,4 @@
-# --- FIX 1: Load .env BEFORE importing anything else ---
+# --- LOAD ENV FIRST ---
 from dotenv import load_dotenv
 load_dotenv() 
 
@@ -13,7 +13,7 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from bs4 import BeautifulSoup  
 
-# Now safe to import analyze because .env is loaded
+# Ensure analyze.py and utils.py are in your folder!
 from analyze import analyze_text
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -21,6 +21,7 @@ from firebase_admin import credentials, firestore
 app = Flask(__name__, template_folder="templates")
 CORS(app)
 
+# Enable Debug Logging
 logging.basicConfig(level=logging.INFO)
 logger = app.logger
 
@@ -28,13 +29,8 @@ logger = app.logger
 # 1. Firebase Setup
 # ------------------------------------------------------------------
 def init_firebase():
-    if firebase_admin._apps:
-        return firestore.client()
-
-    if not os.getenv("FIREBASE_PRIVATE_KEY"):
-        logger.warning("⚠️ Firebase variables missing. Running in Memory Mode.")
-        return None
-
+    if firebase_admin._apps: return firestore.client()
+    if not os.getenv("FIREBASE_PRIVATE_KEY"): return None
     try:
         cred_data = {
             "type": os.getenv("FIREBASE_TYPE"),
@@ -50,139 +46,160 @@ def init_firebase():
         }
         cred = credentials.Certificate(cred_data)
         firebase_admin.initialize_app(cred)
-        logger.info("Firebase initialized successfully.")
         return firestore.client()
-    except Exception as e:
-        logger.error(f"Firebase initialization failed: {e}")
-        return None
+    except: return None
 
 db = init_firebase()
-GLOBAL_STATS = []
-GLOBAL_EMAILS = []
+GLOBAL_STATS = [] 
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def utc_now_iso(): return datetime.now(timezone.utc).isoformat()
 
-def save_analysis_doc(payload: dict):
-    minimal = {
-        "tone": payload.get("tone", "Neutral"),
-        "urgency": payload.get("urgency", "Low"),
-        "summary": payload.get("summary", ""),
-    }
-    GLOBAL_STATS.append(minimal)
-    GLOBAL_EMAILS.insert(0, payload)
-
-    if not db: return
-
+def save_analysis_doc(payload):
+    """Save to Firebase (Safely)"""
     try:
-        message_id = str(payload.get("messageId") or "")
-        if message_id:
-            doc_ref = db.collection("email_analysis").document(message_id)
-        else:
-            doc_ref = db.collection("email_analysis").document()
-
-        doc = payload.copy()
-        if "createdAt" not in doc:
-            doc["createdAt"] = utc_now_iso()
-        doc_ref.set(doc, merge=True)
+        GLOBAL_STATS.append({"tone": payload.get("tone"), "urgency": payload.get("urgency")})
+        if db:
+            doc_id = str(payload.get("messageId") or "")
+            col = db.collection("email_analysis")
+            doc_ref = col.document(doc_id) if doc_id else col.document()
+            payload["createdAt"] = utc_now_iso()
+            doc_ref.set(payload, merge=True)
     except Exception as e:
-        logger.error(f"Failed to save to Firebase: {e}")
+        logger.error(f"Firebase Error: {e}")
 
 # ------------------------------------------------------------------
-# 2. Zoho Mail API Helpers
+# 2. Zoho Mail API
 # ------------------------------------------------------------------
-
 ZOHO_ACCOUNTS_URL = os.environ.get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.com")
 ZOHO_API_DOMAIN = os.environ.get("ZOHO_API_DOMAIN", "https://mail.zoho.com")
-ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
-ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
-ZOHO_REFRESH_TOKEN = os.environ.get("ZOHO_REFRESH_TOKEN")
-ZOHO_ACCOUNT_ID = os.environ.get("ZOHO_ACCOUNT_ID")
-ZOHO_INBOX_FOLDER_ID = os.environ.get("ZOHO_INBOX_FOLDER_ID")
 
-def get_zoho_access_token() -> str:
-    if not (ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET and ZOHO_REFRESH_TOKEN):
-        return ""
-
-    params = {
-        "refresh_token": ZOHO_REFRESH_TOKEN,
-        "client_id": ZOHO_CLIENT_ID,
-        "client_secret": ZOHO_CLIENT_SECRET,
-        "grant_type": "refresh_token",
-    }
-    url = f"{ZOHO_ACCOUNTS_URL}/oauth/v2/token"
-    
+def get_zoho_token():
     try:
-        resp = requests.post(url, params=params, timeout=15)
-        if resp.status_code != 200: return ""
-        return resp.json().get("access_token", "")
-    except: return ""
+        url = f"{ZOHO_ACCOUNTS_URL}/oauth/v2/token"
+        params = {
+            "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN"),
+            "client_id": os.environ.get("ZOHO_CLIENT_ID"),
+            "client_secret": os.environ.get("ZOHO_CLIENT_SECRET"),
+            "grant_type": "refresh_token",
+        }
+        resp = requests.post(url, params=params, timeout=5)
+        return resp.json().get("access_token")
+    except: return None
 
-def list_inbox_emails(limit: int = 10):
-    token = get_zoho_access_token()
+def list_inbox_emails(limit=5):
+    token = get_zoho_token()
     if not token: return {}
-
-    url = f"{ZOHO_API_DOMAIN}/api/accounts/{ZOHO_ACCOUNT_ID}/messages/view"
-    params = {"folderId": ZOHO_INBOX_FOLDER_ID, "limit": limit, "sortorder": "false"}
+    url = f"{ZOHO_API_DOMAIN}/api/accounts/{os.environ.get('ZOHO_ACCOUNT_ID')}/messages/view"
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+    params = {"folderId": os.environ.get("ZOHO_INBOX_FOLDER_ID"), "limit": limit, "sortorder": "false"}
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=15)
-        return resp.json()
+        return requests.get(url, headers=headers, params=params, timeout=10).json()
     except: return {}
 
-def get_email_content(message_id: str):
-    token = get_zoho_access_token()
-    if not token: return "", "", ""
-    url = f"{ZOHO_API_DOMAIN}/api/accounts/{ZOHO_ACCOUNT_ID}/folders/{ZOHO_INBOX_FOLDER_ID}/messages/{message_id}/content"
-    headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+def get_email_content(msg_id):
+    token = get_zoho_token()
+    url = f"{ZOHO_API_DOMAIN}/api/accounts/{os.environ.get('ZOHO_ACCOUNT_ID')}/folders/{os.environ.get('ZOHO_INBOX_FOLDER_ID')}/messages/{msg_id}/content"
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        data = resp.json().get("data", {})
-        subject = data.get("subject", "")
-        from_address = data.get("fromAddress", "")
-        body = data.get("content") or data.get("body") or ""
-        return subject, from_address, body
-    except: return "Error", "Error", ""
+        resp = requests.get(url, headers={"Authorization": f"Zoho-oauthtoken {token}"}, timeout=10)
+        d = resp.json().get("data", {})
+        return d.get("subject", ""), d.get("content", "")
+    except: return "", ""
 
-def analyze_zoho_message(message_id: str):
-    subject, from_addr, body = get_email_content(message_id)
+# --- FIXED FUNCTION NAME HERE ---
+def find_id_by_text(text):
+    """Matches button text to Email ID"""
+    raw = list_inbox_emails(limit=8)
+    msgs = raw.get("data") or []
+    for m in msgs:
+        subject = m.get("subject", "")
+        # Check exact match or if subject starts with the button text (handling "..." truncation)
+        if text == subject or subject.startswith(text.rstrip("...")):
+            return m.get("messageId")
+    return None
+
+def analyze_zoho_msg(mid):
+    """Helper to analyze a specific message ID"""
+    subj, body = get_email_content(mid)
     text_content = body
     try:
         if body and "<" in body:
             text_content = BeautifulSoup(body, "html.parser").get_text(" ", strip=True)
     except: pass
-
-    full_text = f"{subject}\n\n{text_content}".strip()
-    analysis = analyze_text(full_text)
-
+    
+    full_text = f"{subj}\n\n{text_content}".strip()
+    res = analyze_text(full_text)
+    
     doc = {
-        "messageId": message_id,
-        "subject": subject,
-        "summary": analysis.get("summary", ""),
-        "tone": analysis.get("tone", "Neutral"),
-        "urgency": analysis.get("urgency", "Low"),
-        "suggested_reply": analysis.get("suggested_reply", ""),
-        "createdAt": utc_now_iso(),
+        "messageId": mid, "subject": subj, "summary": res.get("summary"),
+        "tone": res.get("tone"), "urgency": res.get("urgency"),
+        "suggested_reply": res.get("suggested_reply"), "source": "zoho-mail"
     }
     save_analysis_doc(doc)
     return doc
 
 # ------------------------------------------------------------------
-# 3. Helper to Find Email ID by Subject (For SalesIQ)
+# 3. WEBHOOK (The Logic)
 # ------------------------------------------------------------------
-def find_id_by_subject(subject_text):
-    """Since SalesIQ only sends back the text clicked, we match it to an ID"""
-    raw = list_inbox_emails(limit=10)
-    messages = raw.get("data") or []
-    for msg in messages:
-        if msg.get("subject") == subject_text:
-            return msg.get("messageId")
-    return None
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        logger.info(f"INCOMING: {data}")
 
-# ------------------------------------------------------------------
-# 4. Routes
-# ------------------------------------------------------------------
+        # 1. Extract User Text
+        user_text = ""
+        if isinstance(data, dict):
+            if "message" in data: user_text = data["message"]
+            elif "data" in data: user_text = data["data"].get("message") or data["data"].get("text")
+            elif "visitor" in data: user_text = data["visitor"].get("message")
 
+        # 2. GREETING or RESET
+        if not user_text or user_text.lower().strip() in ["hi", "hello", "menu", "restart"]:
+            raw = list_inbox_emails(limit=5)
+            msgs = raw.get("data") or []
+            suggestions = [m.get("subject")[:30]+"..." for m in msgs if m.get("subject")]
+            
+            if not suggestions:
+                return jsonify({"replies": [{"text": "⚠️ No emails found in Zoho Inbox."}]})
+
+            return jsonify({
+                "replies": [{"text": "👋 **Connected!** Tap an email below to analyze:"}],
+                "suggestions": suggestions
+            })
+
+        # 3. CHECK IF USER CLICKED AN EMAIL SUBJECT
+        # (This uses the FIXED function name)
+        msg_id = find_id_by_text(user_text)
+
+        if msg_id:
+            # Case A: It is an email subject -> Analyze that Email
+            doc = analyze_zoho_msg(msg_id)
+            return jsonify({
+                "replies": [
+                    {"text": f"✅ **Analysis: {doc.get('subject')}**"},
+                    {"text": f"📝 **Summary:** {doc.get('summary')}"},
+                    {"text": f"❤️ **Tone:** {doc.get('tone')} | 🔥 **Urgency:** {doc.get('urgency')}"},
+                    {"text": f"💡 **Draft Reply:**\n{doc.get('suggested_reply')}"}
+                ],
+                "suggestions": ["Hi", "Dashboard"]
+            })
+        
+        else:
+            # Case B: It is raw text -> Analyze the text directly
+            res = analyze_text(user_text)
+            return jsonify({
+                "replies": [
+                    {"text": f"📝 **Summary:** {res.get('summary')}"},
+                    {"text": f"💡 **Draft:** {res.get('suggested_reply')}"}
+                ],
+                "suggestions": ["Hi"]
+            })
+
+    except Exception as e:
+        logger.error(f"CRITICAL ERROR: {traceback.format_exc()}")
+        return jsonify({"replies": [{"text": "⚠️ Error processing request. Check server logs."}]})
+
+# --- DASHBOARD ROUTES ---
 @app.route("/")
 def index(): return render_template("index.html")
 
@@ -191,98 +208,16 @@ def mails_page(): return render_template("mails.html")
 
 @app.route("/api/stats")
 def stats():
+    # Simplified stats for dashboard
     try:
-        recent = []
-        total = 0; high_urgency = 0; angry = 0; positive = 0
-        if db:
-            docs = db.collection("email_analysis").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(50).stream()
-            for d in docs:
-                item = d.to_dict()
-                total += 1
-                if item.get("urgency") == "High": high_urgency += 1
-                if "Angry" in item.get("tone", ""): angry += 1
-                recent.append(item)
-        return jsonify({"total": total, "high_urgency": high_urgency, "angry": angry, "recent": recent[:5]})
-    except: return jsonify({"total": 0, "recent": []})
-
-@app.route("/fetch_zoho_emails", methods=["POST"])
-def trigger_sync():
-    try:
-        raw = list_inbox_emails(limit=10)
-        messages = raw.get("data") or []
-        count = 0
-        for msg in messages:
-            mid = msg.get("messageId")
-            analyze_zoho_message(mid)
-            count += 1
-        return jsonify({"status": "success", "analyzed": count})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-# --- SALESIQ WEBHOOK (UPDATED FOR EMAIL FETCHING) ---
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        data = request.get_json(force=True)
-        user_text = ""
-        
-        # Extract text
-        if isinstance(data, dict):
-            if "message" in data: user_text = data["message"]
-            elif "data" in data: user_text = data["data"].get("message") or data["data"].get("text")
-            elif "visitor" in data: user_text = data["visitor"].get("message")
-        
-        # --- SCENARIO 1: Greeting -> Show Email List ---
-        # If user says "Hi", "Hello", "Restart", or empty
-        if not user_text or user_text.lower().strip() in ["hi", "hello", "start", "menu"]:
-            raw = list_inbox_emails(limit=5)
-            messages = raw.get("data") or []
-            
-            # Create Suggestions (Clickable pills)
-            suggestions = []
-            for m in messages:
-                subj = m.get("subject", "No Subject")
-                if subj: suggestions.append(subj) # Only add valid subjects
-            
-            if not suggestions:
-                return jsonify({"replies": [{"text": "⚠️ No emails found in Zoho Inbox."}]})
-
-            return jsonify({
-                "replies": [{"text": "👋 **Connected to Zoho Mail!**\nTap an email below to analyze it:"}],
-                "suggestions": suggestions
-            })
-
-        # --- SCENARIO 2: User clicked a Subject -> Analyze IT ---
-        # Check if the text matches a real email subject
-        msg_id = find_id_by_subject(user_text)
-        
-        if msg_id:
-            # User selected an email! Analyze it.
-            doc = analyze_zoho_message(msg_id)
-            return jsonify({
-                "replies": [
-                    {"text": f"✅ **Analysis: {doc.get('subject')}**"},
-                    {"text": f"📝 **Summary:** {doc.get('summary')}"},
-                    {"text": f"❤️ **Tone:** {doc.get('tone')} | 🔥 **Urgency:** {doc.get('urgency')}"},
-                    {"text": f"💡 **Draft Reply:**\n{doc.get('suggested_reply')}"}
-                ],
-                "suggestions": ["Hi", "Dashboard"] # Options to go back
-            })
-
-        # --- SCENARIO 3: Fallback (Raw Text Analysis) ---
-        # If it's not "Hi" and not an Email Subject, treat as raw text
-        result = analyze_text(user_text)
+        recent = [x for x in reversed(GLOBAL_EMAILS[-5:])]
         return jsonify({
-            "replies": [
-                {"text": f"📝 **Summary:** {result.get('summary')}"},
-                {"text": f"💡 **Draft:** {result.get('suggested_reply')}"}
-            ],
-            "suggestions": ["Hi"]
+            "total": len(GLOBAL_EMAILS), 
+            "high_urgency": sum(1 for x in GLOBAL_STATS if x['urgency']=='High'),
+            "angry": sum(1 for x in GLOBAL_STATS if 'Angry' in x['tone']),
+            "recent": recent
         })
-
-    except Exception as e:
-        logger.error(f"Webhook Error: {e}")
-        return jsonify({"replies": [{"text": "⚠️ Error processing request."}]})
+    except: return jsonify({})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

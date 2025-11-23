@@ -1,203 +1,151 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartMail Insight | Command Center</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SmartMail | Insight Engine</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+
+  <style>
+    body{font-family:'Inter',sans-serif;background:#0f172a;color:#f1f5f9;margin:0;padding:20px}
+    .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:30px;padding-bottom:20px;border-bottom:1px solid #1e293b}
+    h1{margin:0;font-size:24px;font-weight:600;background:linear-gradient(to right, #38bdf8, #818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
     
-    <!-- FIXED LINKS (No Markdown syntax) -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    /* Stats Grid */
+    .grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:20px;margin-bottom:30px}
+    .card{background:#1e293b;padding:20px;border-radius:12px;border:1px solid #334155;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1)}
+    .card h2{font-size:13px;color:#94a3b8;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em}
+    .big{font-size:32px;font-weight:700}
     
-    <style>
-        /* MODERN DARK THEME */
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #0f172a;
-            background-image: radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
-            color: #e2e8f0;
-            margin: 0;
-            padding: 40px;
-            min-height: 100vh;
-        }
-
-        /* HEADER */
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 40px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        h1 { font-weight: 600; letter-spacing: -1px; margin: 0; font-size: 28px; }
-        .status-badge {
-            background: rgba(16, 185, 129, 0.2);
-            color: #34d399;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            border: 1px solid rgba(16, 185, 129, 0.3);
-        }
-        .pulse { width: 8px; height: 8px; background: #34d399; border-radius: 50%; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
-
-        /* GRID LAYOUT */
-        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 24px; }
-        .main-row { grid-template-columns: 1fr 2fr; }
-
-        /* CARDS (Glassmorphism) */
-        .card {
-            background: rgba(30, 41, 59, 0.7);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            transition: transform 0.2s;
-        }
-        .card:hover { transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.2); }
-
-        h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-top: 0; }
-        .big-number { font-size: 48px; font-weight: 700; color: white; margin: 10px 0; }
-        .sub-text { font-size: 13px; color: #64748b; }
-        
-        .text-red { color: #f87171; }
-        .text-green { color: #4ade80; }
-
-        /* FEED TABLE */
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { text-align: left; color: #64748b; font-size: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); }
-        td { padding: 15px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 14px; color: #cbd5e1; }
-        .badge { padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-        .b-angry { background: rgba(248, 113, 113, 0.2); color: #f87171; }
-        .b-neutral { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
-        .b-high { color: #f87171; font-weight: bold; }
-
-    </style>
+    /* Table */
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    th{text-align:left;padding:12px;color:#64748b;font-weight:600;border-bottom:1px solid #334155}
+    td{padding:12px;border-bottom:1px solid #1e293b;color:#cbd5e1}
+    tr:last-child td{border-bottom:none}
+    
+    /* Badges */
+    .badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600}
+    .b-angry{background:rgba(248,113,113,0.15);color:#f87171}
+    .b-neutral{background:rgba(148,163,184,0.15);color:#94a3b8}
+    .b-positive{background:rgba(74,222,128,0.15);color:#4ade80}
+    
+    /* Button */
+    .btn{background:#3b82f6;color:white;border:none;padding:10px 20px;border-radius:8px;font-weight:600;cursor:pointer;transition:all 0.2s}
+    .btn:hover{background:#2563eb;transform:translateY(-1px)}
+    .btn:disabled{background:#64748b;cursor:wait;opacity:0.7}
+    
+    .layout-split{display:grid;grid-template-columns:1fr 350px;gap:20px}
+    @media(max-width:800px){.layout-split{grid-template-columns:1fr}}
+  </style>
 </head>
 <body>
 
-    <div class="header">
-        <div>
-            <h1>SmartMail Insight Engine</h1>
-            <div style="color: #94a3b8; font-size: 14px; margin-top: 5px;">Real-time Semantic Analysis & Triaging</div>
-        </div>
-        <div class="status-badge"><div class="pulse"></div> Live Connection</div>
+  <div class="header">
+    <div>
+      <h1>SmartMail Insight Engine</h1>
+      <div style="color:#64748b;font-size:14px;margin-top:4px">Real-time Sentiment & Triaging</div>
+    </div>
+    <button id="syncBtn" class="btn">↻ Sync Zoho Mail</button>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Emails Processed</h2><div class="big" id="totalCount">--</div></div>
+    <div class="card"><h2>High Urgency</h2><div class="big" id="urgentCount" style="color:#f87171">--</div></div>
+    <div class="card"><h2>Negative Tone</h2><div class="big" id="angryCount" style="color:#fbbf24">--</div></div>
+    <div class="card"><h2>Positive Tone</h2><div class="big" id="posCount" style="color:#4ade80">--</div></div>
+  </div>
+
+  <div class="layout-split">
+    <div class="card">
+      <h2 style="margin-bottom:15px">Recent Analysis Stream</h2>
+      <table>
+        <thead><tr><th>Subject / Summary</th><th>Tone</th><th>Urgency</th></tr></thead>
+        <tbody id="feedBody">
+          <tr><td colspan="3" style="text-align:center;padding:20px;color:#475569">Loading live data...</td></tr>
+        </tbody>
+      </table>
     </div>
 
-    <!-- TOP STATS ROW -->
-    <div class="grid">
-        <div class="card">
-            <h2>Emails Processed</h2>
-            <div class="big-number" id="totalCount">0</div>
-            <div class="sub-text">Since session start</div>
-        </div>
-        <div class="card">
-            <h2 style="color:#f87171">Critical Urgency</h2>
-            <div class="big-number text-red" id="urgentCount">0</div>
-            <div class="sub-text">Requires immediate action</div>
-        </div>
-        <div class="card">
-            <h2>Angry Customers</h2>
-            <div class="big-number" id="angryCount">0</div>
-            <div class="sub-text">Sentiment Detection</div>
-        </div>
-        <div class="card">
-            <h2>Avg Response Time</h2>
-            <div class="big-number text-green">1.2s</div>
-            <div class="sub-text">AI Processing Speed</div>
-        </div>
+    <div class="card">
+      <h2 style="margin-bottom:15px">Sentiment Distribution</h2>
+      <div style="height:250px;display:flex;align-items:center;justify-content:center">
+        <canvas id="toneChart"></canvas>
+      </div>
     </div>
+  </div>
 
-    <!-- CHARTS & FEED -->
-    <div class="grid main-row">
-        <div class="card">
-            <h2>Sentiment Distribution</h2>
-            <div style="height: 250px; display: flex; align-items: center; justify-content: center;">
-                <canvas id="toneChart"></canvas>
-            </div>
-        </div>
-        <div class="card">
-            <h2>Live Incoming Feed</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th width="15%">TONE</th>
-                        <th width="15%">URGENCY</th>
-                        <th>AI SUMMARY</th>
-                    </tr>
-                </thead>
-                <tbody id="feedBody">
-                    <!-- JavaScript will inject rows here -->
-                </tbody>
-            </table>
-        </div>
-    </div>
+<script>
+// Chart Setup
+Chart.defaults.color = '#64748b';
+const ctx = document.getElementById('toneChart').getContext('2d');
+const toneChart = new Chart(ctx,{
+  type:'doughnut',
+  data:{
+    labels:['Negative','Neutral','Positive'],
+    datasets:[{data:[0,0,0],backgroundColor:['#f87171','#334155','#4ade80'],borderWidth:0,hoverOffset:4}]
+  },
+  options:{cutout:'75%',plugins:{legend:{display:true,position:'bottom',labels:{usePointStyle:true,padding:20}}}}
+});
 
-    <script>
-        // CHART CONFIGURATION
-        Chart.defaults.color = '#64748b';
-        Chart.defaults.font.family = 'Inter';
-        
-        const ctx = document.getElementById('toneChart').getContext('2d');
-        const toneChart = new Chart(ctx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Angry', 'Neutral', 'Positive'],
-                datasets: [{
-                    data: [0, 0, 0],
-                    backgroundColor: ['#f87171', '#64748b', '#4ade80'],
-                    borderWidth: 0,
-                    hoverOffset: 4
-                }]
-            },
-            options: {
-                responsive: true,
-                cutout: '75%',
-                plugins: { legend: { position: 'bottom', labels: { padding: 20, usePointStyle: true } } }
-            }
-        });
+// Fetch Data Function
+async function fetchData(){
+  try{
+    let res = await fetch('/api/stats');
+    let data = await res.json();
+    
+    // Update Cards
+    document.getElementById('totalCount').innerText = data.total;
+    document.getElementById('urgentCount').innerText = data.high_urgency;
+    document.getElementById('angryCount').innerText = data.angry;
+    document.getElementById('posCount').innerText = data.positive;
 
-        // DATA FETCHING LOGIC
-        async function fetchData() {
-            try {
-                let res = await fetch('/api/stats');
-                let data = await res.json();
-                
-                // Update Counters
-                document.getElementById('totalCount').innerText = data.total;
-                document.getElementById('urgentCount').innerText = data.high_urgency;
-                document.getElementById('angryCount').innerText = data.angry;
+    // Update Chart
+    toneChart.data.datasets[0].data = [data.angry, data.neutral, data.positive];
+    toneChart.update();
 
-                // Update Chart
-                toneChart.data.datasets[0].data = [data.angry, data.neutral, data.positive];
-                toneChart.update();
+    // Update Table
+    let rows = "";
+    (data.recent || []).forEach(item=>{
+      let tone = item.tone || "Neutral";
+      let toneClass = tone.includes("Angry")||tone.includes("Negative") ? "b-angry" : (tone.includes("Positive") ? "b-positive" : "b-neutral");
+      let urgencyStyle = item.urgency === "High" ? "color:#f87171;font-weight:700" : "";
+      let summary = item.summary || item.subject || "No summary";
+      
+      rows += `
+        <tr>
+          <td>
+            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">${item.subject || 'No Subject'}</div>
+            <div style="font-size:12px;color:#94a3b8;line-height:1.4">${summary.substring(0,90)}...</div>
+          </td>
+          <td><span class="badge ${toneClass}">${tone}</span></td>
+          <td style="${urgencyStyle}">${item.urgency||'Low'}</td>
+        </tr>
+      `;
+    });
+    if(rows) document.getElementById('feedBody').innerHTML = rows;
+  }catch(e){ console.error("Fetch error:", e); }
+}
 
-                // Update Table
-                let rows = "";
-                data.recent.forEach(item => {
-                    let toneClass = item.tone.includes("Angry") ? "b-angry" : "b-neutral";
-                    let urgencyStyle = item.urgency === "High" ? "b-high" : "";
-                    
-                    rows += `<tr>
-                        <td><span class="badge ${toneClass}">${item.tone}</span></td>
-                        <td class="${urgencyStyle}">${item.urgency}</td>
-                        <td style="color: #e2e8f0;">${item.summary.substring(0, 65)}...</td>
-                    </tr>`;
-                });
-                document.getElementById('feedBody').innerHTML = rows;
+// Sync Button Logic
+document.getElementById('syncBtn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('syncBtn');
+  const originalText = btn.innerText;
+  btn.innerText = 'Syncing...';
+  btn.disabled = true;
+  
+  try{
+    await fetch('/fetch_zoho_emails', {method:'POST'});
+    setTimeout(fetchData, 1000); // Refresh data after sync
+  }catch(e){ alert("Sync failed"); }
+  
+  btn.innerText = originalText;
+  btn.disabled = false;
+});
 
-            } catch(e) { console.log(e); }
-        }
-
-        // Start fetching data
-        setInterval(fetchData, 2000);
-        fetchData();
-    </script>
+// Auto Refresh every 3 seconds
+setInterval(fetchData, 3000);
+fetchData(); // Initial Call
+</script>
 </body>
 </html>

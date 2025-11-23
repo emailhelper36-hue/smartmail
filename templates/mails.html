@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SmartMail — Inbox</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    body{font-family:'Inter',sans-serif;background:#071028;color:#e6eef8;margin:0}
+    .top{display:flex;justify-content:space-between;padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.03)}
+    .btn{background:#0b2540;padding:8px 12px;border-radius:8px;color:#dbeafe;text-decoration:none;border:1px solid rgba(255,255,255,0.02)}
+    .layout{display:grid;grid-template-columns:360px 1fr;gap:18px;padding:20px}
+    .panel{background:rgba(255,255,255,0.02);border-radius:10px;padding:14px;min-height:80vh}
+    .mail-row{padding:10px;border-bottom:1px solid rgba(255,255,255,0.03);display:flex;gap:10px;align-items:center;cursor:pointer}
+    .mail-row:hover{background:rgba(255,255,255,0.01)}
+    .subject{font-weight:600}
+    .meta{font-size:12px;color:#93a9c6}
+    .tone-pill{padding:4px 8px;border-radius:8px;font-weight:700;font-size:12px}
+    .b-angry{background:rgba(248,113,113,0.12);color:#f87171}
+    .b-high{color:#ff9b9b;font-weight:700}
+    .content{padding:18px}
+    pre{white-space:pre-wrap;color:#dbeafe}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div style="display:flex;gap:12px;align-items:center">
+      <h2 style="margin:0">SmartMail — Inbox</h2>
+      <div style="color:#94a3b8;font-size:13px">Automated analysis and triage</div>
+    </div>
+    <div>
+      <a class="btn" href="/">Dashboard</a>
+      <a class="btn" href="/mails" style="margin-left:8px">Inbox</a>
+      <button id="syncBtn" class="btn" style="margin-left:8px">Sync Zoho Mail</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="panel" id="leftPanel">
+      <div style="margin-bottom:10px;font-size:13px;color:#9fb0c8">Inbox</div>
+      <div id="inboxList">Loading…</div>
+    </div>
+
+    <div class="panel" id="rightPanel">
+      <div style="font-size:13px;color:#9fb0c8;margin-bottom:8px">Message</div>
+      <div id="mailView">
+        <div style="padding:20px;color:#9fb0c8">Select a message on the left to view details.</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+async function fetchEmails(){
+  const res = await fetch('/api/emails');
+  const emails = await res.json();
+  const list = document.getElementById('inboxList');
+  list.innerHTML = '';
+  if(!emails.length){ list.innerHTML = '<div style="color:#94a3b8">No analyzed emails yet.</div>'; return; }
+
+  emails.forEach(e=>{
+    const row = document.createElement('div');
+    row.className = 'mail-row';
+    row.dataset.id = e.id || e.messageId || '';
+
+    const toneClass = (e.tone||'').includes('Angry') ? 'b-angry' : (e.tone||'').includes('Positive') ? 'b-positive' : 'b-neutral';
+    row.innerHTML = `
+      <div style="flex:1">
+        <div class="subject">${e.subject || (e.summary||'No subject').substring(0,60)}</div>
+        <div class="meta">${e.from || ''} • <span style="color:#93a9c6">${new Date(e.createdAt||Date.now()).toLocaleString()}</span></div>
+      </div>
+      <div style="text-align:right">
+        <div class="tone-pill ${toneClass}">${e.tone||'Neutral'}</div>
+        <div style="margin-top:6px" class="${e.urgency==='High'?'b-high':''}">${e.urgency||'Low'}</div>
+      </div>
+    `;
+    row.addEventListener('click', ()=> loadMail(row.dataset.id));
+    list.appendChild(row);
+  });
+}
+
+async function loadMail(id){
+  const res = await fetch(`/api/email/${id}`);
+  if(res.status!==200){ document.getElementById('mailView').innerHTML = '<div style="color:#fda4af">Failed to load message</div>'; return; }
+  const e = await res.json();
+  const panel = document.getElementById('mailView');
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:18px;font-weight:700">${e.subject||'No subject'}</div>
+        <div style="color:#93a9c6;margin-top:6px">${e.from||''} • ${new Date(e.createdAt||Date.now()).toLocaleString()}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="margin-bottom:8px"><strong>Tone:</strong> <span class="tone-pill ${ (e.tone||'').includes('Angry') ? 'b-angry':'' }">${e.tone||'Neutral'}</span></div>
+        <div><strong>Urgency:</strong> <span class="${e.urgency==='High'?'b-high':''}">${e.urgency||'Low'}</span></div>
+      </div>
+    </div>
+
+    <div class="content">
+      <h3 style="margin-top:12px;color:#9fb0c8">AI Summary</h3>
+      <pre>${e.summary||'No summary'}</pre>
+
+      <h3 style="margin-top:12px;color:#9fb0c8">Suggested Reply</h3>
+      <pre>${e.suggested_reply||'No suggested reply'}</pre>
+
+      <h3 style="margin-top:12px;color:#9fb0c8">Original Body</h3>
+      <pre>${e.body||'No body'}</pre>
+    </div>
+  `;
+}
+
+// sync button: call fetch_zoho_emails to ingest latest from Zoho
+document.getElementById('syncBtn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('syncBtn');
+  btn.innerText = 'Syncing…';
+  btn.disabled = true;
+  try{
+    const r = await fetch('/fetch_zoho_emails', {method:'POST'});
+    const j = await r.json();
+    console.log(j);
+    await fetchEmails();
+  }catch(e){ console.error(e) }
+  btn.innerText = 'Sync Zoho Mail';
+  btn.disabled = false;
+});
+
+fetchEmails();
+</script>
+</body>
+</html>

@@ -105,15 +105,16 @@ def get_email_content(msg_id):
         return d.get("subject", ""), d.get("content", "")
     except: return "", ""
 
-# --- FIXED FUNCTION NAME HERE ---
 def find_id_by_text(text):
     """Matches button text to Email ID"""
-    raw = list_inbox_emails(limit=8)
+    raw = list_inbox_emails(limit=10)
     msgs = raw.get("data") or []
+    text_clean = text.rstrip("...").strip()
+    
     for m in msgs:
         subject = m.get("subject", "")
-        # Check exact match or if subject starts with the button text (handling "..." truncation)
-        if text == subject or subject.startswith(text.rstrip("...")):
+        # Check if subject contains the button text
+        if text_clean in subject:
             return m.get("messageId")
     return None
 
@@ -138,7 +139,7 @@ def analyze_zoho_msg(mid):
     return doc
 
 # ------------------------------------------------------------------
-# 3. WEBHOOK (The Logic)
+# 3. WEBHOOK (THE FIXED CRASH-PROOF VERSION)
 # ------------------------------------------------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -146,29 +147,47 @@ def webhook():
         data = request.get_json(force=True)
         logger.info(f"INCOMING: {data}")
 
-        # 1. Extract User Text
+        # --- CRITICAL FIX: Handle Dictionary Messages ---
         user_text = ""
-        if isinstance(data, dict):
-            if "message" in data: user_text = data["message"]
-            elif "data" in data: user_text = data["data"].get("message") or data["data"].get("text")
-            elif "visitor" in data: user_text = data["visitor"].get("message")
+        
+        # 1. Check if 'message' is a Dictionary (Button Click) or String (Type)
+        if "message" in data:
+            msg = data["message"]
+            if isinstance(msg, dict):
+                # SalesIQ sends {'text': 'Happy...', 'type': 'text'}
+                user_text = msg.get("text", "") 
+            else:
+                user_text = str(msg)
+        
+        # 2. Fallback checks
+        elif "data" in data:
+            inner = data["data"]
+            user_text = inner.get("message") or inner.get("text")
+        
+        elif "visitor" in data:
+            user_text = data["visitor"].get("message")
+
+        # Force to string to prevent AttributeError
+        if user_text:
+            user_text = str(user_text).strip()
+        
+        # --- LOGIC ---
 
         # 2. GREETING or RESET
-        if not user_text or user_text.lower().strip() in ["hi", "hello", "menu", "restart"]:
+        if not user_text or user_text.lower() in ["hi", "hello", "menu", "restart", "start"]:
             raw = list_inbox_emails(limit=5)
             msgs = raw.get("data") or []
-            suggestions = [m.get("subject")[:30]+"..." for m in msgs if m.get("subject")]
+            suggestions = [m.get("subject", "No Subject")[:30]+"..." for m in msgs if m.get("subject")]
             
             if not suggestions:
-                return jsonify({"replies": [{"text": "⚠️ No emails found in Zoho Inbox."}]})
+                return jsonify({"replies": [{"text": "⚠️ Connected to Zoho, but Inbox is empty."}]})
 
             return jsonify({
-                "replies": [{"text": "👋 **Connected!** Tap an email below to analyze:"}],
+                "replies": [{"text": "👋 **Connected to Zoho Mail!**\nTap an email below to analyze it:"}],
                 "suggestions": suggestions
             })
 
         # 3. CHECK IF USER CLICKED AN EMAIL SUBJECT
-        # (This uses the FIXED function name)
         msg_id = find_id_by_text(user_text)
 
         if msg_id:
@@ -208,7 +227,6 @@ def mails_page(): return render_template("mails.html")
 
 @app.route("/api/stats")
 def stats():
-    # Simplified stats for dashboard
     try:
         recent = [x for x in reversed(GLOBAL_EMAILS[-5:])]
         return jsonify({

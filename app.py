@@ -145,9 +145,8 @@ def webhook():
         data = request.get_json(force=True)
         logger.info(f"INCOMING: {data}")
 
-        user_text = "" # Default to empty string, NOT None
-        
-        # Extract Text Safely
+        # --- DATA EXTRACTION ---
+        user_text = ""
         if "message" in data:
             msg = data["message"]
             if isinstance(msg, dict): user_text = msg.get("text", "")
@@ -158,11 +157,7 @@ def webhook():
         elif "visitor" in data:
             user_text = data["visitor"].get("message")
 
-        # FORCE STRING (Safety Net)
-        if user_text is None:
-            user_text = ""
-        else:
-            user_text = str(user_text).strip()
+        if user_text: user_text = str(user_text).strip()
         
         # --- LOGIC ---
 
@@ -174,34 +169,41 @@ def webhook():
                 "suggestions": ["Hi"]
             })
 
-        # 2. GREETING (Handle empty text here)
+        # 2. Greeting
         if not user_text or user_text.lower() in ["hi", "hello", "menu", "restart", "start"]:
             raw = list_inbox_emails(limit=5)
             msgs = raw.get("data") or []
             suggestions = [m.get("subject", "No Sub")[:25]+"..." for m in msgs if m.get("subject")]
             
             if not suggestions:
-                return jsonify({"replies": [{"text": "⚠️ Connected, but Inbox is empty."}]})
+                return jsonify({"replies": [{"text": "⚠️ Connected, but no emails found."}]})
 
             return jsonify({
                 "replies": [{"text": "👋 **Connected!** Tap an email to analyze:"}],
                 "suggestions": suggestions
             })
 
-        # 3. Analyze
+        # 3. CHECK IF USER CLICKED AN EMAIL SUBJECT
         msg_id = find_id_by_text(user_text)
+
         if msg_id:
             doc = analyze_zoho_msg(msg_id)
+            
+            # --- THIS IS THE FIX: Shows Subject Again ---
+            subject_line = doc.get('subject') or "Analysis Complete"
+            
             return jsonify({
                 "replies": [
-                    {"text": f"✅ **{doc.get('subject')}**"},
-                    {"text": f"📝 {doc.get('summary')}"},
-                    {"text": f"❤️ {doc.get('tone')} | 🔥 {doc.get('urgency')}"},
-                    {"text": f"💡 **Draft:**\n{doc.get('suggested_reply')}"}
+                    {"text": f"✅ **{subject_line}**"}, 
+                    {"text": f"📝 **Summary:** {doc.get('summary')}"},
+                    {"text": f"❤️ **Tone:** {doc.get('tone')} | 🔥 **Urgency:** {doc.get('urgency')}"},
+                    {"text": f"💡 **Draft Reply:**\n{doc.get('suggested_reply')}"}
                 ],
                 "suggestions": ["Hi", "Dashboard"]
             })
+        
         else:
+            # 4. RAW TEXT ANALYSIS
             res = analyze_text(user_text)
             return jsonify({
                 "replies": [

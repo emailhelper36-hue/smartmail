@@ -99,13 +99,38 @@ def list_inbox_emails(limit=5):
     except: return {}
 
 def get_email_content(msg_id):
+    """Improved email content extraction with better error handling"""
     token = get_zoho_token()
+    if not token:
+        return "", ""
+    
     url = f"{ZOHO_API_DOMAIN}/api/accounts/{os.environ.get('ZOHO_ACCOUNT_ID')}/folders/{os.environ.get('ZOHO_INBOX_FOLDER_ID')}/messages/{msg_id}/content"
     try:
         resp = requests.get(url, headers={"Authorization": f"Zoho-oauthtoken {token}"}, timeout=10)
-        d = resp.json().get("data", {})
-        return d.get("subject", ""), d.get("content", "")
-    except: return "", ""
+        data = resp.json()
+        
+        # Debug logging
+        logger.info(f"Zoho API Response for {msg_id}: {data}")
+        
+        # Extract subject and content with multiple fallbacks
+        if "data" in data:
+            email_data = data["data"]
+            subject = email_data.get("subject", "")
+            
+            # If subject is empty, try alternative field names
+            if not subject:
+                subject = email_data.get("subjectSummary", "") or email_data.get("displaySubject", "")
+            
+            content = email_data.get("content", "") or email_data.get("body", "")
+            
+            return subject, content
+        else:
+            logger.error(f"No data in Zoho response: {data}")
+            return "", ""
+            
+    except Exception as e:
+        logger.error(f"Error fetching email content: {e}")
+        return "", ""
 
 def find_id_by_text(text):
     """Matches button text to Email ID"""
@@ -123,20 +148,34 @@ def find_id_by_text(text):
 def analyze_zoho_msg(mid):
     """Helper to analyze a specific message ID"""
     subj, body = get_email_content(mid)
+    
+    # Debug logging
+    logger.info(f"Analyzing message {mid}: Subject='{subj}', Body length={len(body) if body else 0}")
+    
     text_content = body
     try:
         if body and "<" in body:
             text_content = BeautifulSoup(body, "html.parser").get_text(" ", strip=True)
-    except: pass
+    except Exception as e:
+        logger.error(f"HTML parsing error: {e}")
     
     full_text = f"{subj}\n\n{text_content}".strip()
     res = analyze_text(full_text)
     
     doc = {
-        "messageId": mid, "subject": subj, "summary": res.get("summary"),
-        "tone": res.get("tone"), "urgency": res.get("urgency"),
-        "suggested_reply": res.get("suggested_reply"), "source": "zoho-mail"
+        "messageId": mid, 
+        "subject": subj or "No Subject",  # Ensure we always have a subject
+        "summary": res.get("summary"),
+        "tone": res.get("tone"), 
+        "urgency": res.get("urgency"),
+        "suggested_reply": res.get("suggested_reply"), 
+        "source": "zoho-mail",
+        "analyzedAt": utc_now_iso()
     }
+    
+    # Additional debug
+    logger.info(f"Saving to Firebase: {doc}")
+    
     save_analysis_doc(doc)
     return doc
 

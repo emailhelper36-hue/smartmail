@@ -10,16 +10,14 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
-# --- CUSTOM MODULES ---
 import zoho_service
-from analyze import analyze_text # Using your high-quality analysis
+from analyze import analyze_text 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 app = Flask(__name__, template_folder="templates")
 CORS(app)
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = app.logger
 
@@ -66,7 +64,6 @@ def webhook():
     try:
         data = request.get_json(force=True)
         
-        # Extract Text
         user_text = ""
         if "message" in data and isinstance(data["message"], dict):
             user_text = data["message"].get("text", "")
@@ -84,7 +81,6 @@ def webhook():
 
         # 2. Greeting (List Emails)
         if not user_text or user_text.lower() in ["hi", "hello", "start", "menu"]:
-            # Use Zoho Service to get list
             emails = zoho_service.fetch_latest_emails(limit=5)
             suggestions = [e['subject'] for e in emails]
             
@@ -94,25 +90,29 @@ def webhook():
             })
 
         # 3. Analyze Email (Button Click)
-        # Use Zoho Service to find ID (Handles Cache & Re-fetch)
-        msg_id = zoho_service.find_message_id_by_subject(user_text)
+        # FIX: Get both ID and FULL SUBJECT
+        msg_id, full_subject_cache = zoho_service.find_message_data_by_subject(user_text)
         
         if msg_id:
             # Fetch Content
             email_data = zoho_service.get_full_email_content(msg_id)
             
-            # Use Subject from User Text if fetch failed slightly
-            final_subject = email_data['subject'] if email_data else user_text
-            final_content = email_data['content'] if email_data else "Content unavailable."
+            # Use the Full Subject from Cache if API returns empty subject
+            # Use 'user_text' as last resort
+            final_subject = (email_data and email_data['subject']) or full_subject_cache or user_text
+            
+            final_content = "Content unavailable."
+            if email_data and email_data['content']:
+                final_content = email_data['content']
 
-            # ANALYZE using High-Quality Logic
+            # ANALYZE
             full_text = f"{final_subject}\n\n{final_content}"
             analysis = analyze_text(full_text)
             
             # Prepare Result
             doc = {
                 "messageId": msg_id,
-                "subject": final_subject,
+                "subject": final_subject, # Now stores the REAL subject
                 "summary": analysis['summary'],
                 "tone": analysis['tone'],
                 "urgency": analysis['urgency'],

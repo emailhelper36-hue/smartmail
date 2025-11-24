@@ -13,7 +13,6 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from bs4 import BeautifulSoup  
 
-# Ensure analyze.py and utils.py are in your folder!
 from analyze import analyze_text
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -21,7 +20,6 @@ from firebase_admin import credentials, firestore
 app = Flask(__name__, template_folder="templates")
 CORS(app)
 
-# Enable Debug Logging
 logging.basicConfig(level=logging.INFO)
 logger = app.logger
 
@@ -56,7 +54,6 @@ GLOBAL_EMAILS = []
 def utc_now_iso(): return datetime.now(timezone.utc).isoformat()
 
 def save_analysis_doc(payload):
-    """Save to Firebase (Safely)"""
     try:
         GLOBAL_STATS.append({"tone": payload.get("tone"), "urgency": payload.get("urgency")})
         GLOBAL_EMAILS.insert(0, payload)
@@ -70,131 +67,59 @@ def save_analysis_doc(payload):
         logger.error(f"Firebase Error: {e}")
 
 # ------------------------------------------------------------------
-# 2. Zoho Mail API
+# 2. SIMPLIFIED ZOHO MAIL API (FIXED VERSION)
 # ------------------------------------------------------------------
-ZOHO_ACCOUNTS_URL = os.environ.get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.com")
-ZOHO_API_DOMAIN = os.environ.get("ZOHO_API_DOMAIN", "https://mail.zoho.com")
-
 def get_zoho_token():
     try:
-        url = f"{ZOHO_ACCOUNTS_URL}/oauth/v2/token"
+        url = "https://accounts.zoho.com/oauth/v2/token"
         params = {
             "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN"),
             "client_id": os.environ.get("ZOHO_CLIENT_ID"),
             "client_secret": os.environ.get("ZOHO_CLIENT_SECRET"),
             "grant_type": "refresh_token",
         }
-        resp = requests.post(url, params=params, timeout=5)
+        resp = requests.post(url, params=params, timeout=10)
+        logger.info(f"🔑 Token response: {resp.status_code}")
+        if resp.status_code != 200:
+            logger.error(f"❌ Token error: {resp.text}")
         return resp.json().get("access_token")
-    except: return None
+    except Exception as e:
+        logger.error(f"❌ Token exception: {e}")
+        return None
 
 def list_inbox_emails(limit=5):
+    logger.info("📧 Attempting to fetch emails from Zoho...")
     token = get_zoho_token()
-    if not token: return {}
-    url = f"{ZOHO_API_DOMAIN}/api/accounts/{os.environ.get('ZOHO_ACCOUNT_ID')}/messages/view"
+    if not token: 
+        logger.error("❌ No token available")
+        return {"data": []}
+    
+    account_id = os.environ.get('ZOHO_ACCOUNT_ID')
+    url = f"https://mail.zoho.com/api/accounts/{account_id}/messages/view"
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
-    params = {"folderId": os.environ.get("ZOHO_INBOX_FOLDER_ID"), "limit": limit, "sortorder": "false"}
-    try:
-        return requests.get(url, headers=headers, params=params, timeout=10).json()
-    except: return {}
-
-def get_email_content(msg_id):
-    """Improved email content extraction with better error handling"""
-    token = get_zoho_token()
-    if not token:
-        return "", ""
+    params = {"limit": limit}
     
-    url = f"{ZOHO_API_DOMAIN}/api/accounts/{os.environ.get('ZOHO_ACCOUNT_ID')}/folders/{os.environ.get('ZOHO_INBOX_FOLDER_ID')}/messages/{msg_id}/content"
     try:
-        resp = requests.get(url, headers={"Authorization": f"Zoho-oauthtoken {token}"}, timeout=10)
-        data = resp.json()
+        logger.info(f"🔍 API call: {url}")
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+        logger.info(f"📧 API response: {response.status_code}")
         
-        # Debug logging
-        logger.info(f"Zoho API Response for {msg_id}: {data}")
-        
-        # Extract subject and content with multiple fallbacks
-        if "data" in data:
-            email_data = data["data"]
-            subject = email_data.get("subject", "")
-            
-            # If subject is empty, try alternative field names
-            if not subject:
-                subject = email_data.get("subjectSummary", "") or email_data.get("displaySubject", "")
-            
-            content = email_data.get("content", "") or email_data.get("body", "")
-            
-            return subject, content
+        if response.status_code == 200:
+            data = response.json()
+            messages = data.get("data", [])
+            logger.info(f"✅ Found {len(messages)} emails")
+            for msg in messages:
+                logger.info(f"   - {msg.get('subject', 'No subject')}")
+            return data
         else:
-            logger.error(f"No data in Zoho response: {data}")
-            return "", ""
-            
+            logger.error(f"❌ API error {response.status_code}: {response.text}")
+            return {"data": []}
     except Exception as e:
-        logger.error(f"Error fetching email content: {e}")
-        return "", ""
-
-def find_id_by_text(text):
-    """Matches button text to Email ID - IMPROVED MATCHING"""
-    if not text: return None
-    raw = list_inbox_emails(limit=10)
-    msgs = raw.get("data") or []
-    text_clean = text.rstrip("...").strip().lower()
-    
-    for m in msgs:
-        subject = m.get("subject", "").lower()
-        # More flexible matching - check if button text is contained in subject
-        if text_clean in subject or subject in text_clean:
-            return m.get("messageId")
-    return None
-
-def analyze_zoho_msg(mid):
-    """Helper to analyze a specific message ID - SIMPLE FIX"""
-    # First get subject from the message list (which we know works)
-    raw = list_inbox_emails(limit=10)
-    msgs = raw.get("data") or []
-    subject_from_list = ""
-    for m in msgs:
-        if m.get("messageId") == mid:
-            subject_from_list = m.get("subject", "")
-            break
-    
-    # Then get content from content API
-    subj, body = get_email_content(mid)
-    
-    # Use subject from list (PRIORITY) since we know it works
-    final_subject = subject_from_list or subj or "No Subject"
-    
-    # SIMPLE FIX: Just take first 100 chars to avoid any duplication issues
-    final_subject = final_subject[:100]
-    
-    # Debug logging
-    logger.info(f"Analyzing message {mid}: Cleaned Subject='{final_subject}'")
-    
-    text_content = body
-    try:
-        if body and "<" in body:
-            text_content = BeautifulSoup(body, "html.parser").get_text(" ", strip=True)
-    except Exception as e:
-        logger.error(f"HTML parsing error: {e}")
-    
-    full_text = f"{final_subject}\n\n{text_content}".strip()
-    res = analyze_text(full_text)
-    
-    doc = {
-        "messageId": mid, 
-        "subject": final_subject,
-        "summary": res.get("summary"),
-        "tone": res.get("tone"), 
-        "urgency": res.get("urgency"),
-        "suggested_reply": res.get("suggested_reply"), 
-        "source": "zoho-mail",
-        "analyzedAt": utc_now_iso()
-    }
-    
-    save_analysis_doc(doc)
-    return doc
+        logger.error(f"❌ API exception: {e}")
+        return {"data": []}
 
 # ------------------------------------------------------------------
-# 3. WEBHOOK (THE FIX IS HERE)
+# 3. WEBHOOK (SIMPLIFIED)
 # ------------------------------------------------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -202,32 +127,23 @@ def webhook():
         data = request.get_json(force=True)
         logger.info(f"INCOMING: {data}")
 
-        # --- FIX 1: Default to EMPTY STRING, never None ---
         user_text = ""
-        
-        # 1. Extract User Text Safely
         if "message" in data:
             msg = data["message"]
             if isinstance(msg, dict):
-                user_text = msg.get("text", "") # Handle Dictionary
+                user_text = msg.get("text", "")
             else:
                 user_text = str(msg)
-        
         elif "data" in data:
             inner = data["data"]
             user_text = inner.get("message") or inner.get("text") or ""
-        
         elif "visitor" in data:
-            # This handles the "Trigger" event which crashed before
             user_text = data["visitor"].get("message", "")
 
-        # --- FIX 2: Ensure it's a string before using .lower() ---
         if user_text is None:
             user_text = ""
         else:
             user_text = str(user_text).strip()
-
-        # --- LOGIC ---
 
         # 1. Dashboard Shortcut
         if user_text.lower() == "dashboard":
@@ -237,48 +153,35 @@ def webhook():
                 "suggestions": ["Hi"]
             })
 
-        # 2. Greeting (Handles empty text/start of chat)
+        # 2. Greeting
         if not user_text or user_text.lower() in ["hi", "hello", "menu", "restart", "start"]:
             raw = list_inbox_emails(limit=5)
             msgs = raw.get("data") or []
             suggestions = [m.get("subject", "No Sub")[:25]+"..." for m in msgs if m.get("subject")]
             
             if not suggestions:
-                return jsonify({"replies": [{"text": "⚠️ Connected to Zoho, but Inbox is empty."}]})
+                return jsonify({
+                    "replies": [{
+                        "text": "🔧 Zoho connection issue. But you can still analyze text directly! Try typing any email content."
+                    }],
+                    "suggestions": ["Test: Urgent security update", "Test: Happy customer feedback"]
+                })
 
             return jsonify({
                 "replies": [{"text": "👋 **Connected to Zoho Mail!**\nTap an email below to analyze it:"}],
                 "suggestions": suggestions
             })
 
-        # 3. Check Button Click vs Raw Text
-        msg_id = find_id_by_text(user_text)
-
-        if msg_id:
-            # Case A: Email Selected
-            doc = analyze_zoho_msg(msg_id)
-            subject_line = doc.get('subject') or "Analysis Complete"
-            
-            return jsonify({
-                "replies": [
-                    {"text": f"✅ **{subject_line}**"},
-                    {"text": f"📝 **Summary:** {doc.get('summary')}"},
-                    {"text": f"❤️ **Tone:** {doc.get('tone')} | 🔥 **Urgency:** {doc.get('urgency')}"},
-                    {"text": f"💡 **Draft Reply:**\n{doc.get('suggested_reply')}"}
-                ],
-                "suggestions": ["Hi", "Dashboard"]
-            })
-        
-        else:
-            # Case B: Raw Text
-            res = analyze_text(user_text)
-            return jsonify({
-                "replies": [
-                    {"text": f"📝 **Summary:** {res.get('summary')}"},
-                    {"text": f"💡 **Draft:** {res.get('suggested_reply')}"}
-                ],
-                "suggestions": ["Hi"]
-            })
+        # 3. Direct text analysis (fallback)
+        res = analyze_text(user_text)
+        return jsonify({
+            "replies": [
+                {"text": f"📝 **Summary:** {res.get('summary')}"},
+                {"text": f"❤️ **Tone:** {res.get('tone')} | 🔥 **Urgency:** {res.get('urgency')}"},
+                {"text": f"💡 **Draft Reply:**\n{res.get('suggested_reply')}"}
+            ],
+            "suggestions": ["Hi"]
+        })
 
     except Exception as e:
         logger.error(f"CRITICAL ERROR: {traceback.format_exc()}")
@@ -295,8 +198,6 @@ def mails_page(): return render_template("mails.html")
 def stats():
     try:
         recent = [x for x in reversed(GLOBAL_EMAILS[-5:])]
-        
-        # Calculate stats safely
         total = len(GLOBAL_EMAILS)
         urgent = sum(1 for x in GLOBAL_STATS if str(x.get('urgency')) == 'High')
         angry = sum(1 for x in GLOBAL_STATS if 'Angry' in str(x.get('tone', '')))
@@ -324,7 +225,20 @@ def trigger_sync():
         for msg in messages:
             mid = msg.get("messageId")
             if not any(e.get('messageId') == mid for e in GLOBAL_EMAILS):
-                analyze_zoho_msg(mid)
+                # Simple analysis without complex Zoho content API
+                subject = msg.get("subject", "No Subject")
+                res = analyze_text(subject)
+                doc = {
+                    "messageId": mid, 
+                    "subject": subject,
+                    "summary": res.get("summary"),
+                    "tone": res.get("tone"), 
+                    "urgency": res.get("urgency"),
+                    "suggested_reply": res.get("suggested_reply"), 
+                    "source": "zoho-mail",
+                    "analyzedAt": utc_now_iso()
+                }
+                save_analysis_doc(doc)
                 count += 1
         return jsonify({"status": "success", "analyzed": count})
     except Exception as e:
@@ -332,4 +246,5 @@ def trigger_sync():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    logger.info("🚀 Server starting with enhanced Zoho debugging...")
     app.run(host="0.0.0.0", port=port)

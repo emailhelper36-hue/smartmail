@@ -79,7 +79,7 @@ def fetch_latest_emails(limit=5):
                 subject = msg.get("subject", "No Subject")
                 clean_list.append({
                     "subject": (subject[:25] + '..') if len(subject) > 25 else subject,
-                    "full_subject": subject, # We need this!
+                    "full_subject": subject,
                     "messageId": msg.get("messageId")
                 })
             EMAIL_LIST_CACHE = clean_list
@@ -89,12 +89,7 @@ def fetch_latest_emails(limit=5):
     return []
 
 def find_message_data_by_subject(user_text):
-    """
-    Returns (messageId, full_subject)
-    """
     global EMAIL_LIST_CACHE
-    
-    # Re-fetch if empty
     if not EMAIL_LIST_CACHE:
         fetch_latest_emails(limit=5)
 
@@ -103,11 +98,9 @@ def find_message_data_by_subject(user_text):
     for email in EMAIL_LIST_CACHE:
         subj = email['subject'].lower()
         full_subj = email['full_subject'].lower()
-
         if clean_input == subj.rstrip(".") or clean_input in full_subj:
             return email['messageId'], email['full_subject']
 
-    # API Fallback
     token = get_access_token()
     account_id = get_account_id()
     url = f"{API_DOMAIN}/api/accounts/{account_id}/messages/search"
@@ -124,34 +117,48 @@ def find_message_data_by_subject(user_text):
     return None, None
 
 def get_full_email_content(message_id):
+    """
+    ROBUST CONTENT FETCHING
+    1. Try /content (Full body)
+    2. If that fails, try /messages/{id} (Metadata + Fragment)
+    """
     token = get_access_token()
     account_id = get_account_id()
-    
-    url = f"{API_DOMAIN}/api/accounts/{account_id}/messages/{message_id}/content"
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
     
+    # METHOD 1: Full Content
+    url_content = f"{API_DOMAIN}/api/accounts/{account_id}/messages/{message_id}/content"
+    
     try:
-        print(f"📥 Fetching content for ID: {message_id}")
-        resp = requests.get(url, headers=headers, timeout=12)
+        print(f"📥 Attempting full download for ID: {message_id}")
+        resp = requests.get(url_content, headers=headers, timeout=10)
         
         if resp.status_code == 200:
             data = resp.json()
             inner = data.get("data", {})
-            
-            # TRY ALL POSSIBLE CONTENT FIELDS
-            content = inner.get("content") or inner.get("body") or inner.get("summary") or ""
-            
-            # If still empty, Zoho might have returned a 200 OK but with no content field
-            if not content:
-                print(f"⚠️ Empty body received. Full response: {data}")
-                content = "No text content found in email body."
+            content = inner.get("content") or inner.get("body")
+            if content:
+                return {"subject": inner.get("subject", ""), "content": content}
                 
-            return {"subject": inner.get("subject", ""), "content": content}
-        else:
-            print(f"❌ Content API Error {resp.status_code}: {resp.text}")
-            global ACCOUNT_ID_CACHE
-            ACCOUNT_ID_CACHE = None 
-            return None
+        print(f"⚠️ Full download failed ({resp.status_code}). Trying fallback...")
+        
+        # METHOD 2: Message Details (Summary/Fragment)
+        # This is lighter and almost always works if the ID is valid
+        url_details = f"{API_DOMAIN}/api/accounts/{account_id}/messages/{message_id}"
+        resp2 = requests.get(url_details, headers=headers, timeout=10)
+        
+        if resp2.status_code == 200:
+            data2 = resp2.json().get("data", {})
+            # 'fragment' is the preview text you see in the inbox
+            fallback_text = data2.get("fragment") or data2.get("summary") or "No text summary available."
+            print("✅ Recovered content via Fallback (Fragment)")
+            return {
+                "subject": data2.get("subject", ""), 
+                "content": f"[Preview Content] {fallback_text}"
+            }
+            
     except Exception as e:
         print(f"❌ Content Fetch Exception: {e}")
-        return None
+
+    # Return None only if BOTH methods fail
+    return None

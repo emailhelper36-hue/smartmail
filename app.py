@@ -193,10 +193,53 @@ def list_inbox_emails(limit=5, force_refresh=False):
         return EMAILS_CACHE  # Return cached data on exception
 
 def get_email_content(message_id):
-    """Get full email content - SIMPLIFIED to avoid 404 errors"""
-    # For now, just return basic content to avoid API issues
-    # In future, we can implement proper content fetching
-    return f"Email content for message {message_id} - Content fetching simplified to avoid API limits"
+    """Get FULL email content from Zoho API"""
+    token = get_zoho_token()
+    if not token:
+        logger.error("No token available for content fetch")
+        return "Authentication failed - cannot fetch email content"
+    
+    account_id = os.environ.get('ZOHO_ACCOUNT_ID')
+    if not account_id:
+        logger.error("ZOHO_ACCOUNT_ID not set")
+        return "Account ID not configured"
+    
+    # Try the main content endpoint
+    url = f"https://mail.zoho.com/api/accounts/{account_id}/messages/{message_id}/content"
+    headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+    
+    try:
+        logger.info(f"Fetching email content for message: {message_id}")
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            email_data = data.get("data", {})
+            
+            # Extract subject and content
+            subject = email_data.get("subject", "No Subject")
+            content = email_data.get("content", "") or email_data.get("body", "")
+            
+            if content:
+                # Clean HTML tags if present
+                if "<" in content and ">" in content:
+                    soup = BeautifulSoup(content, "html.parser")
+                    content = soup.get_text(separator=" ", strip=True)
+                
+                full_content = f"Subject: {subject}\n\n{content}"
+                logger.info(f"Successfully fetched email content, length: {len(full_content)}")
+                return full_content
+            else:
+                logger.warning("Empty content in email response")
+                return f"Subject: {subject}\n\nNo body content available"
+                
+        else:
+            logger.error(f"Content API error {response.status_code}: {response.text}")
+            return f"Error fetching email content: {response.status_code}"
+            
+    except Exception as e:
+        logger.error(f"Content fetch exception: {e}")
+        return f"Exception fetching email content: {str(e)}"
 
 def find_email_by_subject(user_text):
     """Find email ID by matching subject text using cached data"""
@@ -215,19 +258,19 @@ def find_email_by_subject(user_text):
     return None
 
 def analyze_zoho_email(message_id):
-    """Analyze a Zoho email efficiently"""
+    """Analyze a Zoho email with FULL content"""
     try:
-        # Get subject from cached emails
+        # Get FULL email content first
+        email_content = get_email_content(message_id)
+        
+        # Get subject for display (from cache)
         subject = "No Subject"
         for msg in EMAILS_CACHE.get("data", []):
             if msg.get("messageId") == message_id:
                 subject = msg.get("subject", "No Subject")
                 break
         
-        # Get basic content (simplified to avoid API issues)
-        email_content = f"Subject: {subject}"
-        
-        # Analyze the content
+        # Analyze the FULL content
         analysis = analyze_text(email_content)
         
         # Create analysis document

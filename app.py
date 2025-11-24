@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
+# --- CUSTOM MODULES ---
 import zoho_service
 from analyze import analyze_text 
 import firebase_admin
@@ -18,10 +19,13 @@ from firebase_admin import credentials, firestore
 app = Flask(__name__, template_folder="templates")
 CORS(app)
 
+# Enable Logging
 logging.basicConfig(level=logging.INFO)
 logger = app.logger
 
-# --- FIREBASE ---
+# ------------------------------------------------------------------
+# 1. Firebase Setup
+# ------------------------------------------------------------------
 def init_firebase():
     if firebase_admin._apps: return firestore.client()
     if not os.environ.get("FIREBASE_PRIVATE_KEY"): return None
@@ -58,12 +62,15 @@ def save_analysis_doc(payload):
     except Exception as e:
         logger.error(f"Save Error: {e}")
 
-# --- WEBHOOK ---
+# ------------------------------------------------------------------
+# 2. WEBHOOK
+# ------------------------------------------------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
         
+        # Extract Text Safely
         user_text = ""
         if "message" in data and isinstance(data["message"], dict):
             user_text = data["message"].get("text", "")
@@ -72,14 +79,14 @@ def webhook():
         
         user_text = str(user_text).strip()
         
-        # 1. Dashboard
+        # --- SCENARIO 1: Dashboard Link ---
         if user_text.lower() == "dashboard":
              return jsonify({
-                "replies": [{"text": f"📊 **Dashboard:**\n{request.host_url}"}],
+                "replies": [{"text": f"📊 **SmartMail Dashboard:**\n{request.host_url}"}],
                 "suggestions": ["Hi"]
             })
 
-        # 2. Greeting (List Emails)
+        # --- SCENARIO 2: Greeting (List Emails) ---
         if not user_text or user_text.lower() in ["hi", "hello", "start", "menu"]:
             emails = zoho_service.fetch_latest_emails(limit=5)
             suggestions = [e['subject'] for e in emails]
@@ -89,30 +96,30 @@ def webhook():
                 "suggestions": suggestions
             })
 
-        # 3. Analyze Email (Button Click)
-        # FIX: Get both ID and FULL SUBJECT
+        # --- SCENARIO 3: Analyze Email (Button Click) ---
+        # 1. Find ID and REAL Subject (Fixes Truncated Subject Bug)
         msg_id, full_subject_cache = zoho_service.find_message_data_by_subject(user_text)
         
         if msg_id:
-            # Fetch Content
+            # 2. Fetch Content (With Fallback logic from zoho_service)
             email_data = zoho_service.get_full_email_content(msg_id)
             
-            # Use the Full Subject from Cache if API returns empty subject
-            # Use 'user_text' as last resort
+            # 3. Determine Final Subject (API > Cache > User Input)
             final_subject = (email_data and email_data['subject']) or full_subject_cache or user_text
             
+            # 4. Determine Final Content
             final_content = "Content unavailable."
-            if email_data and email_data['content']:
+            if email_data and email_data.get('content'):
                 final_content = email_data['content']
 
-            # ANALYZE
+            # 5. Analyze
             full_text = f"{final_subject}\n\n{final_content}"
             analysis = analyze_text(full_text)
             
-            # Prepare Result
+            # 6. Save to Firebase
             doc = {
                 "messageId": msg_id,
-                "subject": final_subject, # Now stores the REAL subject
+                "subject": final_subject,
                 "summary": analysis['summary'],
                 "tone": analysis['tone'],
                 "urgency": analysis['urgency'],
@@ -122,6 +129,7 @@ def webhook():
             }
             save_analysis_doc(doc)
 
+            # 7. Respond to Bot
             return jsonify({
                 "replies": [
                     {"text": f"✅ **{doc['subject']}**"},
@@ -132,7 +140,7 @@ def webhook():
                 "suggestions": ["Hi", "Dashboard"]
             })
             
-        # 4. Fallback (Raw Text)
+        # --- SCENARIO 4: Fallback (Raw Text) ---
         analysis = analyze_text(user_text)
         return jsonify({
             "replies": [
@@ -147,15 +155,22 @@ def webhook():
         logger.error(f"Webhook Error: {traceback.format_exc()}")
         return jsonify({"replies": [{"text": "⚠️ System Error."}]})
 
-# --- DASHBOARD ROUTES ---
+# ------------------------------------------------------------------
+# 3. DASHBOARD ROUTES
+# ------------------------------------------------------------------
 @app.route("/")
-def index(): return render_template("index.html")
+def index():
+    # UPDATED: Now points to dashboard.html
+    return render_template("dashboard.html")
 
 @app.route("/api/history")
 def history():
     if not db: return jsonify([])
-    docs = db.collection("email_analysis").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(20).stream()
-    return jsonify([d.to_dict() for d in docs])
+    try:
+        docs = db.collection("email_analysis").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(20).stream()
+        return jsonify([d.to_dict() for d in docs])
+    except:
+        return jsonify([])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

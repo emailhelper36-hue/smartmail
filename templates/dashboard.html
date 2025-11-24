@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartMail Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { background: linear-gradient(90deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 30px; }
+        
+        .card-grid { display: grid; gap: 20px; }
+        
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; }
+        .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; }
+        
+        .subject { font-weight: 600; font-size: 1.1em; color: #fff; }
+        .badges { display: flex; gap: 10px; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; }
+        
+        .b-urgent-High { background: #ef4444; color: white; }
+        .b-urgent-Low { background: #3b82f6; color: white; }
+        
+        .b-tone-Negative { background: #f59e0b; color: black; }
+        .b-tone-Positive { background: #10b981; color: white; }
+        .b-tone-Neutral { background: #64748b; color: white; }
+        
+        .section-title { font-size: 0.85em; text-transform: uppercase; color: #94a3b8; margin: 10px 0 5px; }
+        .text-block { background: #0f172a; padding: 10px; border-radius: 6px; font-size: 0.95em; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SmartMail Analysis History</h1>
+        <div id="content" class="card-grid">
+            <div style="text-align: center; color: #64748b;">Loading data...</div>
+        </div>
+    </div>
+
+    <script>
+        async function loadData() {
+            try {
+                const res = await fetch('/api/history');
+                const data = await res.json();
+                const container = document.getElementById('content');
+                
+                if(data.length === 0) {
+                    container.innerHTML = '<div style="text-align: center;">No analyses saved yet. Use the bot to analyze emails.</div>';
+                    return;
+                }
+
+                container.innerHTML = data.map(item => `
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="subject">${item.subject}</div>
+                            <div class="badges">
+                                <span class="badge b-urgent-${item.urgency}">${item.urgency} Urgency</span>
+                                <span class="badge b-tone-${item.tone}">${item.tone}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="section-title">Summary</div>
+                        <div class="text-block">${item.summary}</div>
+                        
+                        <div class="section-title">Suggested Reply</div>
+                        <div class="text-block" style="color: #93c5fd;">${item.reply.replace(/\n/g, '<br>')}</div>
+                        
+                        <div style="margin-top: 10px; font-size: 0.8em; color: #64748b; text-align: right;">
+                            Analyzed: ${new Date(item.timestamp).toLocaleString()}
+                        </div>
+                    </div>
+                `).join('');
+                
+            } catch(e) {
+                console.error(e);
+            }
+        }
+        
+        loadData();
+        setInterval(loadData, 10000); // Refresh every 10s
+    </script>
+</body>
+</html>

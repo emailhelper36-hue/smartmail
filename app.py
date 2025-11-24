@@ -147,7 +147,7 @@ def find_id_by_text(text):
     return None
 
 def analyze_zoho_msg(mid):
-    """Helper to analyze a specific message ID - IMPROVED SUBJECT EXTRACTION"""
+    """Helper to analyze a specific message ID - SIMPLE FIX"""
     # First get subject from the message list (which we know works)
     raw = list_inbox_emails(limit=10)
     msgs = raw.get("data") or []
@@ -160,11 +160,14 @@ def analyze_zoho_msg(mid):
     # Then get content from content API
     subj, body = get_email_content(mid)
     
-    # Use subject from list if content API returns empty
-    final_subject = subj or subject_from_list or "No Subject"
+    # Use subject from list (PRIORITY) since we know it works
+    final_subject = subject_from_list or subj or "No Subject"
+    
+    # SIMPLE FIX: Just take first 100 chars to avoid any duplication issues
+    final_subject = final_subject[:100]
     
     # Debug logging
-    logger.info(f"Analyzing message {mid}: Subject='{final_subject}'")
+    logger.info(f"Analyzing message {mid}: Cleaned Subject='{final_subject}'")
     
     text_content = body
     try:
@@ -186,9 +189,6 @@ def analyze_zoho_msg(mid):
         "source": "zoho-mail",
         "analyzedAt": utc_now_iso()
     }
-    
-    # Additional debug
-    logger.info(f"Saving to Firebase: Subject='{final_subject}'")
     
     save_analysis_doc(doc)
     return doc

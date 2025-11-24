@@ -133,24 +133,38 @@ def get_email_content(msg_id):
         return "", ""
 
 def find_id_by_text(text):
-    """Matches button text to Email ID"""
+    """Matches button text to Email ID - IMPROVED MATCHING"""
     if not text: return None
     raw = list_inbox_emails(limit=10)
     msgs = raw.get("data") or []
-    text_clean = text.rstrip("...").strip()
+    text_clean = text.rstrip("...").strip().lower()
     
     for m in msgs:
-        subject = m.get("subject", "")
-        if text_clean in subject:
+        subject = m.get("subject", "").lower()
+        # More flexible matching - check if button text is contained in subject
+        if text_clean in subject or subject in text_clean:
             return m.get("messageId")
     return None
 
 def analyze_zoho_msg(mid):
-    """Helper to analyze a specific message ID"""
+    """Helper to analyze a specific message ID - IMPROVED SUBJECT EXTRACTION"""
+    # First get subject from the message list (which we know works)
+    raw = list_inbox_emails(limit=10)
+    msgs = raw.get("data") or []
+    subject_from_list = ""
+    for m in msgs:
+        if m.get("messageId") == mid:
+            subject_from_list = m.get("subject", "")
+            break
+    
+    # Then get content from content API
     subj, body = get_email_content(mid)
     
+    # Use subject from list if content API returns empty
+    final_subject = subj or subject_from_list or "No Subject"
+    
     # Debug logging
-    logger.info(f"Analyzing message {mid}: Subject='{subj}', Body length={len(body) if body else 0}")
+    logger.info(f"Analyzing message {mid}: Subject='{final_subject}'")
     
     text_content = body
     try:
@@ -159,12 +173,12 @@ def analyze_zoho_msg(mid):
     except Exception as e:
         logger.error(f"HTML parsing error: {e}")
     
-    full_text = f"{subj}\n\n{text_content}".strip()
+    full_text = f"{final_subject}\n\n{text_content}".strip()
     res = analyze_text(full_text)
     
     doc = {
         "messageId": mid, 
-        "subject": subj or "No Subject",  # Ensure we always have a subject
+        "subject": final_subject,
         "summary": res.get("summary"),
         "tone": res.get("tone"), 
         "urgency": res.get("urgency"),
@@ -174,7 +188,7 @@ def analyze_zoho_msg(mid):
     }
     
     # Additional debug
-    logger.info(f"Saving to Firebase: {doc}")
+    logger.info(f"Saving to Firebase: Subject='{final_subject}'")
     
     save_analysis_doc(doc)
     return doc
@@ -287,17 +301,19 @@ def stats():
         urgent = sum(1 for x in GLOBAL_STATS if str(x.get('urgency')) == 'High')
         angry = sum(1 for x in GLOBAL_STATS if 'Angry' in str(x.get('tone', '')))
         positive = sum(1 for x in GLOBAL_STATS if 'Positive' in str(x.get('tone', '')))
+        neutral = total - angry - positive
         
         return jsonify({
             "total": total, 
             "high_urgency": urgent, 
             "angry": angry,
             "positive": positive,
+            "neutral": neutral,
             "recent": recent
         })
     except Exception as e:
         logger.error(f"Stats Error: {e}")
-        return jsonify({"total": 0, "high_urgency": 0, "angry": 0, "positive": 0, "recent": []})
+        return jsonify({"total": 0, "high_urgency": 0, "angry": 0, "positive": 0, "neutral": 0, "recent": []})
 
 @app.route("/fetch_zoho_emails", methods=["POST"])
 def trigger_sync():

@@ -3,13 +3,13 @@ import requests
 import re
 from utils import simple_sentence_split, first_n_sentences
 
-# Free Hugging Face models that work well
+# Updated HuggingFace API endpoints
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# Better models for free tier
-API_URL_SUM = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-API_URL_TONE = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
-API_URL_KEYWORDS = "https://api-inference.huggingface.co/models/yanekyuk/bert-keyword-extractor"
+# New router-based endpoints
+API_BASE = "https://router.huggingface.co"
+API_URL_SUM = f"{API_BASE}/facebook/bart-large-cnn"
+API_URL_TONE = f"{API_BASE}/cardiffnlp/twitter-roberta-base-sentiment-latest"
 
 # Enhanced keyword lists
 URGENT_KEYWORDS = {
@@ -23,8 +23,8 @@ TONE_KEYWORDS = {
     "urgent": ["urgent", "critical", "emergency", "immediately", "asap"]
 }
 
-def query_hf_api(payload, api_url, max_retries=2):
-    """Robust API call with retries"""
+def query_hf_api(payload, api_url, max_retries=1):
+    """Robust API call with new router endpoints"""
     if not HF_TOKEN: 
         return None
         
@@ -36,11 +36,11 @@ def query_hf_api(payload, api_url, max_retries=2):
             
             if response.status_code == 200:
                 return response.json()
-            elif response.status_code == 503:
-                # Model loading, wait and retry
+            elif response.status_code in [503, 429]:
+                # Model loading or rate limit, wait and retry
                 if attempt < max_retries - 1:
                     import time
-                    time.sleep(5)
+                    time.sleep(3)
                     continue
             else:
                 print(f"API Error {response.status_code}: {response.text}")
@@ -67,7 +67,7 @@ def smart_summarize(text):
         input_text = text[:1024] if len(text) > 1024 else text
         
         result = query_hf_api(
-            {"inputs": input_text, "max_length": 150, "min_length": 30, "do_sample": False},
+            {"inputs": input_text},
             API_URL_SUM
         )
         

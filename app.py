@@ -143,9 +143,11 @@ def analyze_zoho_msg(mid):
 def webhook():
     try:
         data = request.get_json(force=True)
-        user_text = ""
+        logger.info(f"INCOMING: {data}")
+
+        user_text = "" # Default to empty string, NOT None
         
-        # Extract text safely
+        # Extract Text Safely
         if "message" in data:
             msg = data["message"]
             if isinstance(msg, dict): user_text = msg.get("text", "")
@@ -156,40 +158,46 @@ def webhook():
         elif "visitor" in data:
             user_text = data["visitor"].get("message")
 
-        if user_text: user_text = str(user_text).strip()
+        # FORCE STRING (Safety Net)
+        if user_text is None:
+            user_text = ""
+        else:
+            user_text = str(user_text).strip()
         
+        # --- LOGIC ---
+
         # 1. Dashboard Shortcut
         if user_text.lower() == "dashboard":
+            site_url = f"https://{request.host}/"
             return jsonify({
-                "replies": [{"text": f"📊 **Command Center:**\nhttps://{request.host}/"}],
+                "replies": [{"text": f"📊 **Command Center:**\n{site_url}"}],
                 "suggestions": ["Hi"]
             })
 
-        # 2. Greeting
+        # 2. GREETING (Handle empty text here)
         if not user_text or user_text.lower() in ["hi", "hello", "menu", "restart", "start"]:
             raw = list_inbox_emails(limit=5)
             msgs = raw.get("data") or []
             suggestions = [m.get("subject", "No Sub")[:25]+"..." for m in msgs if m.get("subject")]
             
             if not suggestions:
-                return jsonify({"replies": [{"text": "⚠️ Connected, but no emails found."}]})
+                return jsonify({"replies": [{"text": "⚠️ Connected, but Inbox is empty."}]})
 
             return jsonify({
                 "replies": [{"text": "👋 **Connected!** Tap an email to analyze:"}],
                 "suggestions": suggestions
             })
 
-        # 3. Check Button Click vs Raw Text
+        # 3. Analyze
         msg_id = find_id_by_text(user_text)
-
         if msg_id:
             doc = analyze_zoho_msg(msg_id)
             return jsonify({
                 "replies": [
-                    {"text": f"✅ **Analysis: {doc.get('subject')}**"},
-                    {"text": f"📝 **Summary:** {doc.get('summary')}"},
-                    {"text": f"❤️ **Tone:** {doc.get('tone')} | 🔥 **Urgency:** {doc.get('urgency')}"},
-                    {"text": f"💡 **Draft Reply:**\n{doc.get('suggested_reply')}"}
+                    {"text": f"✅ **{doc.get('subject')}**"},
+                    {"text": f"📝 {doc.get('summary')}"},
+                    {"text": f"❤️ {doc.get('tone')} | 🔥 {doc.get('urgency')}"},
+                    {"text": f"💡 **Draft:**\n{doc.get('suggested_reply')}"}
                 ],
                 "suggestions": ["Hi", "Dashboard"]
             })
@@ -206,10 +214,6 @@ def webhook():
     except Exception as e:
         logger.error(f"Webhook Error: {e}")
         return jsonify({"replies": [{"text": "⚠️ Error processing request."}]})
-
-# ------------------------------------------------------------------
-# 4. DASHBOARD ROUTES (FIXED STATS)
-# ------------------------------------------------------------------
 @app.route("/")
 def index(): return render_template("index.html")
 

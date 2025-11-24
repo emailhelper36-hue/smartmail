@@ -9,9 +9,10 @@ API_URL_SUM = "https://api-inference.huggingface.co/models/facebook/bart-large-c
 API_URL_TONE = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment"
 
 # --- KEYWORD LISTS ---
-ANGRY_KEYWORDS = ["unacceptable", "angry", "frustrat", "disappointed", "terrible", "worst", "hate"]
-URGENT_KEYWORDS = ["urgent", "asap", "immediately", "deadline", "critical"]
-POSITIVE_KEYWORDS = ["happy", "great", "excellent", "love", "good", "thanks", "wonderful"]
+ANGRY_KEYWORDS = ["unacceptable", "angry", "frustrat", "disappointed", "terrible", "worst", "hate", "cancel"]
+URGENT_KEYWORDS = ["urgent", "asap", "immediately", "deadline", "critical", "now"]
+# NEW: Added "Positive" keywords
+POSITIVE_KEYWORDS = ["happy", "great", "excellent", "love", "good", "thanks", "wonderful", "best", "thrilled", "nice"]
 
 def query_hf_api(payload, api_url):
     if not HF_TOKEN: return None
@@ -47,17 +48,25 @@ def classify_tone_urgency(text):
         if output and isinstance(output, list) and isinstance(output[0], list):
             scores = output[0]
             top = max(scores, key=lambda x: x['score'])
+            
             if top['label'] == 'LABEL_0': tone = "Angry/Negative"
             elif top['label'] == 'LABEL_2': tone = "Positive"
-            if top['score'] > 0.6: ai_success = True
+            
+            # LOWERED THRESHOLD: 0.4 (Makes it more sensitive)
+            if top['score'] > 0.4: ai_success = True
     except: pass
 
-    # 3. Tone (Fallback)
+    # 3. Tone Fallback (THIS IS WHAT YOU WERE MISSING)
+    # If AI failed OR AI thinks it's Neutral, we check keywords manually
     if not ai_success or tone == "Neutral":
+        
+        # Check Angry first
         for k in ANGRY_KEYWORDS:
             if k in text_lower: 
                 tone = "Angry"
                 break
+        
+        # Check Positive next (This fixes your issue)
         if tone != "Angry":
             for k in POSITIVE_KEYWORDS:
                 if k in text_lower:
@@ -74,7 +83,7 @@ def analyze_text(text):
     tone, urgency = classify_tone_urgency(text)
     
     if "Angry" in tone: reply = f"I apologize for the issue. {summary} Escalating now."
-    elif "Positive" in tone: reply = f"Thanks for the kind words! {summary}"
+    elif "Positive" in tone: reply = f"Thanks for the kind words! {summary} We appreciate it."
     else: reply = f"Received. {summary} Will update shortly."
     
     return {

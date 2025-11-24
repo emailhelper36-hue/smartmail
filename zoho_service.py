@@ -2,10 +2,10 @@ import os
 import requests
 import time
 
-# --- CACHE (The "Memory") ---
+# --- CACHE ---
 TOKEN_CACHE = {"access_token": None, "expires_at": 0}
 ACCOUNT_ID_CACHE = None 
-EMAIL_LIST_CACHE = [] # Stores subjects to fix the "Unknown Email" bug
+EMAIL_LIST_CACHE = [] 
 
 # --- CONFIG ---
 API_DOMAIN = os.environ.get("ZOHO_API_DOMAIN", "https://mail.zoho.com").strip()
@@ -35,17 +35,14 @@ def get_access_token():
     return None
 
 def get_account_id():
-    """Auto-detects Account ID (Fixes 400 Errors)"""
     global ACCOUNT_ID_CACHE
     if ACCOUNT_ID_CACHE: return ACCOUNT_ID_CACHE
     
-    # Try Env
     env_id = os.environ.get("ZOHO_ACCOUNT_ID", "").strip()
     if env_id:
         ACCOUNT_ID_CACHE = env_id
         return env_id
         
-    # Auto-detect if Env is missing/wrong
     token = get_access_token()
     if not token: return None
     try:
@@ -62,7 +59,6 @@ def get_account_id():
     return None
 
 def fetch_latest_emails(limit=5):
-    """Fetches emails and POPULATES CACHE"""
     global EMAIL_LIST_CACHE
     token = get_access_token()
     account_id = get_account_id()
@@ -83,7 +79,7 @@ def fetch_latest_emails(limit=5):
                 subject = msg.get("subject", "No Subject")
                 clean_list.append({
                     "subject": (subject[:25] + '..') if len(subject) > 25 else subject,
-                    "full_subject": subject,
+                    "full_subject": subject, # We need this!
                     "messageId": msg.get("messageId")
                 })
             EMAIL_LIST_CACHE = clean_list
@@ -92,16 +88,14 @@ def fetch_latest_emails(limit=5):
         print(f"❌ List Error: {e}")
     return []
 
-def find_message_id_by_subject(user_text):
+def find_message_data_by_subject(user_text):
     """
-    1. Checks Cache (Exact & Partial Match)
-    2. RE-FETCHES if Cache is Empty (Fixes Render Restart Bug)
+    Returns (messageId, full_subject)
     """
     global EMAIL_LIST_CACHE
     
-    # RE-FETCH LOGIC
+    # Re-fetch if empty
     if not EMAIL_LIST_CACHE:
-        print("⚠️ Cache empty. Re-fetching...")
         fetch_latest_emails(limit=5)
 
     clean_input = user_text.strip().lower().rstrip(".")
@@ -110,9 +104,8 @@ def find_message_id_by_subject(user_text):
         subj = email['subject'].lower()
         full_subj = email['full_subject'].lower()
 
-        # Match "Happy.." or "Happy" or "Happy with service"
         if clean_input == subj.rstrip(".") or clean_input in full_subj:
-            return email['messageId']
+            return email['messageId'], email['full_subject']
 
     # API Fallback
     token = get_access_token()
@@ -124,9 +117,11 @@ def find_message_id_by_subject(user_text):
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         data = resp.json()
         if "data" in data and data["data"]:
-            return data["data"][0].get("messageId")
+            item = data["data"][0]
+            return item.get("messageId"), item.get("subject")
     except: pass
-    return None
+    
+    return None, None
 
 def get_full_email_content(message_id):
     token = get_access_token()
@@ -136,15 +131,27 @@ def get_full_email_content(message_id):
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
     
     try:
+        print(f"📥 Fetching content for ID: {message_id}")
         resp = requests.get(url, headers=headers, timeout=12)
+        
         if resp.status_code == 200:
             data = resp.json()
             inner = data.get("data", {})
-            content = inner.get("content") or inner.get("body") or "No text content."
-            return {"subject": inner.get("subject", "Analyzed Email"), "content": content}
+            
+            # TRY ALL POSSIBLE CONTENT FIELDS
+            content = inner.get("content") or inner.get("body") or inner.get("summary") or ""
+            
+            # If still empty, Zoho might have returned a 200 OK but with no content field
+            if not content:
+                print(f"⚠️ Empty body received. Full response: {data}")
+                content = "No text content found in email body."
+                
+            return {"subject": inner.get("subject", ""), "content": content}
         else:
-            # Clear ID cache if 400 error occurs
+            print(f"❌ Content API Error {resp.status_code}: {resp.text}")
             global ACCOUNT_ID_CACHE
             ACCOUNT_ID_CACHE = None 
             return None
-    except: return None
+    except Exception as e:
+        print(f"❌ Content Fetch Exception: {e}")
+        return None

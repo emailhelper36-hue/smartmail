@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+import time
 
 # --- CONFIGURATION ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -10,8 +11,8 @@ API_BASE = "https://router.huggingface.co"
 API_URL_SUM = f"{API_BASE}/facebook/bart-large-cnn"
 # 2. Sentiment
 API_URL_TONE = f"{API_BASE}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# 3. Reply Generation (Mistral Instruct)
-API_URL_GEN = f"{API_BASE}/mistralai/Mistral-7B-Instruct-v0.3"
+# 3. Reply Generation (Zephyr is faster/more reliable on free tier than Mistral)
+API_URL_GEN = f"{API_BASE}/HuggingFaceH4/zephyr-7b-beta"
 
 # --- KEYWORDS ---
 URGENT_KEYWORDS = [
@@ -40,42 +41,65 @@ def first_n_sentences(text, n=2):
     sentences = simple_sentence_split(text)
     return " ".join(sentences[:n])
 
-def query_hf_api(payload, api_url):
-    if not HF_TOKEN: return None
+def query_hf_api(payload, api_url, retries=1):
+    """
+    Robust API Query with extended patience for free tier.
+    """
+    if not HF_TOKEN:
+        print("⚠️ HF_TOKEN missing")
+        return None
+        
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    try:
-        # Increased timeout to 20s to prevent cutoff
-        response = requests.post(api_url, headers=headers, json=payload, timeout=20)
-        if response.status_code == 200:
-            return response.json()
-    except: pass
+    
+    for attempt in range(retries + 1):
+        try:
+            # Increased to 60s because cold boots can take ~45s
+            response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+            
+            if response.status_code == 200:
+                return response.json()
+            
+            # Handle 503 (Model Loading)
+            if response.status_code == 503:
+                data = response.json()
+                wait_time = data.get("estimated_time", 20)
+                print(f"⏳ Model loading... Waiting {wait_time:.1f}s (Attempt {attempt+1})")
+                time.sleep(wait_time) # Wait the FULL duration requested
+                continue 
+                
+            print(f"⚠️ API Error {response.status_code}: {response.text}")
+            return None
+            
+        except requests.exceptions.Timeout:
+            print(f"⏰ Request timed out (Attempt {attempt+1})")
+        except Exception as e:
+            print(f"❌ Connection Error: {e}")
+            
     return None
 
 # --- ANALYSIS LOGIC ---
 
 def get_summary(text):
     if len(text) < 50: return text.strip()
-    try:
-        result = query_hf_api({"inputs": text[:1500]}, API_URL_SUM)
-        if result and isinstance(result, list) and 'summary_text' in result[0]:
-            return result[0]['summary_text'].strip()
-    except: pass
+    result = query_hf_api({"inputs": text[:1500]}, API_URL_SUM, retries=1)
+    
+    if result and isinstance(result, list) and 'summary_text' in result[0]:
+        return result[0]['summary_text'].strip()
+        
     return first_n_sentences(text, 2)
 
 def get_tone_urgency(text):
     text_lower = text.lower()
     
-    # 1. URGENCY (Keywords First)
+    # 1. URGENCY
     urgency = "Low"
     for w in URGENT_KEYWORDS:
         if re.search(rf"\b{re.escape(w)}\b", text_lower):
             urgency = "High"
             break
             
-    # 2. TONE (Hybrid)
+    # 2. TONE
     tone = "Neutral"
-    
-    # Keywords
     neg_count = sum(1 for w in TONE_KEYWORDS["angry"] if re.search(rf"\b{re.escape(w)}\b", text_lower))
     pos_count = sum(1 for w in TONE_KEYWORDS["positive"] if re.search(rf"\b{re.escape(w)}\b", text_lower))
     
@@ -83,18 +107,16 @@ def get_tone_urgency(text):
     if neg_count > 0 and neg_count > pos_count: keyword_tone = "Negative"
     elif pos_count > 0 and pos_count > neg_count: keyword_tone = "Positive"
 
-    # AI
+    # AI Check
     ai_tone = None
-    try:
-        result = query_hf_api({"inputs": text[:512]}, API_URL_TONE)
-        if result and isinstance(result, list) and isinstance(result[0], list):
-            scores = result[0]
-            top = max(scores, key=lambda x: x['score'])
-            label = top['label'].lower()
-            if label == 'negative': ai_tone = "Negative"
-            elif label == 'positive': ai_tone = "Positive"
-            else: ai_tone = "Neutral"
-    except: pass
+    result = query_hf_api({"inputs": text[:512]}, API_URL_TONE, retries=1)
+    if result and isinstance(result, list) and isinstance(result[0], list):
+        scores = result[0]
+        top = max(scores, key=lambda x: x['score'])
+        label = top['label'].lower()
+        if label == 'negative': ai_tone = "Negative"
+        elif label == 'positive': ai_tone = "Positive"
+        else: ai_tone = "Neutral"
 
     if keyword_tone: tone = keyword_tone
     elif ai_tone: tone = ai_tone
@@ -104,51 +126,55 @@ def get_tone_urgency(text):
     return tone, urgency
 
 def generate_reply(text, tone, urgency, summary):
-    """Generate a reply. If AI fails, use a clean, complete template."""
+    """Generate Reply using Zephyr"""
     
-    instruction = "Write a polite and professional customer support email reply."
-    if tone == "Positive":
-        instruction = "Write a warm 'Thank You' email acknowledging the positive feedback."
-    elif tone == "Negative":
-        instruction = "Write an empathetic apology email addressing the frustration."
-    elif urgency == "High":
-        instruction = "Write a reassuring email acknowledging the urgency."
+    instruction = "Write a polite customer support email reply."
+    if tone == "Positive": instruction = "Write a warm 'Thank You' email acknowledging positive feedback."
+    elif tone == "Negative": instruction = "Write an empathetic apology email addressing frustration."
+    elif urgency == "High": instruction = "Write a reassuring email regarding the urgent issue."
     
-    prompt = f"""<s>[INST] You are a helpful customer support agent.
-    Email Summary: "{summary}"
-    Customer Sentiment: {tone}
-    Priority Level: {urgency}
-    
+    # Zephyr/Mistral Prompt Format
+    prompt = f"""<|system|>
+    You are a helpful customer support agent.
+    Your goal is to write a professional email reply based on the summary and sentiment provided.
+    Sign off as 'Support Team'.
+    </s>
+    <|user|>
+    Summary: "{summary}"
+    Sentiment: {tone}
     Task: {instruction}
-    Requirements:
-    1. Keep it concise (under 100 words).
-    2. Sign off as 'Support Team'.
-    3. Ensure the response is complete sentences only.
-    [/INST]"""
+    Keep it concise (under 100 words).
+    </s>
+    <|assistant|>"""
 
-    try:
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 250, # Increased to ensure completion
-                "return_full_text": False,
-                "temperature": 0.7
-            }
-        }
-        result = query_hf_api(payload, API_URL_GEN)
-        if result and isinstance(result, list) and 'generated_text' in result[0]:
-            return result[0]['generated_text'].strip()
-    except: pass
+    print("🤖 Asking AI to generate reply...") # Debug Log
     
-    # --- ROBUST FALLBACKS (No more weird quotes) ---
+    # 2 Retries for generation
+    result = query_hf_api({
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 200, 
+            "return_full_text": False, 
+            "temperature": 0.7,
+            "top_p": 0.9
+        }
+    }, API_URL_GEN, retries=2)
+    
+    if result and isinstance(result, list) and 'generated_text' in result[0]:
+        print("✅ AI Reply Generated Successfully")
+        return result[0]['generated_text'].strip()
+    
+    print("⚠️ AI Generation Failed. Using Fallback.")
+    
+    # --- FALLBACKS ---
     if tone == "Positive":
         return "Thank you so much for your kind words! We are thrilled to hear your feedback and have shared it with the entire team. Thanks for being a great customer!\n\nBest regards,\nSupport Team"
     elif tone == "Negative":
-        return "We sincerely apologize for the experience you have had. This is not the standard we strive for. We are investigating this matter immediately and will get back to you shortly.\n\nBest regards,\nSupport Team"
+        return "We sincerely apologize for the experience you have had. This is not the standard we strive for. We are investigating this matter immediately.\n\nBest regards,\nSupport Team"
     elif urgency == "High":
         return "We have received your urgent request. Our team has been notified and is prioritizing your case. Expect an update very soon.\n\nBest regards,\nSupport Team"
     
-    return "Thank you for your email. We have received your message and will respond to your inquiry shortly.\n\nBest regards,\nSupport Team"
+    return "Thank you for your email. We have received your message and will respond shortly.\n\nBest regards,\nSupport Team"
 
 def extract_key_points(text):
     sentences = simple_sentence_split(text)

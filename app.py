@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+from bs4 import BeautifulSoup # <--- IMPORT THIS
 
 # --- CUSTOM MODULES ---
-# Make sure zoho_service.py and analyze.py are in the same folder!
 import zoho_service
 from analyze import analyze_text 
 import firebase_admin
@@ -71,47 +71,56 @@ def webhook():
     try:
         data = request.get_json(force=True)
         
-        # Extract User Text Safely
         user_text = ""
         if "message" in data and isinstance(data["message"], dict):
             user_text = data["message"].get("text", "")
         elif "visitor" in data:
              user_text = data["visitor"].get("message", "")
-        
         user_text = str(user_text).strip()
         
-        # --- SCENARIO 1: Dashboard Link ---
+        # 1. Dashboard
         if user_text.lower() == "dashboard":
              return jsonify({
                 "replies": [{"text": f"📊 **Dashboard:**\n{request.host_url}"}],
                 "suggestions": ["Hi"]
             })
 
-        # --- SCENARIO 2: Greeting (List Emails) ---
+        # 2. Greeting
         if not user_text or user_text.lower() in ["hi", "hello", "start", "menu"]:
             emails = zoho_service.fetch_latest_emails(limit=5)
             suggestions = [e['subject'] for e in emails]
-            
             return jsonify({
                 "replies": [{"text": "👋 **Hello!** Select an email to analyze:"}],
                 "suggestions": suggestions
             })
 
-        # --- SCENARIO 3: Analyze Email (Button Click) ---
-        # FIX: We now unpack 3 values (ID, Subject, FolderID)
+        # 3. Analyze Email (Button Click)
         msg_id, full_subject, folder_id = zoho_service.find_message_data_by_subject(user_text)
         
         if msg_id:
-            # FIX: We pass the FolderID to get content
             email_data = zoho_service.get_full_email_content(msg_id, folder_id)
             
-            # Determine Final Data
+            final_subject = full_subject or user_text
+            final_content = "Content unavailable."
+
             if email_data:
-                final_subject = email_data['subject']
-                final_content = email_data['content']
-            else:
-                final_subject = full_subject or user_text
-                final_content = "Content unavailable."
+                if email_data.get('subject'):
+                    final_subject = email_data['subject']
+                
+                raw_content = email_data.get('content', "")
+                
+                # --- HTML CLEANING LOGIC ---
+                try:
+                    if raw_content and ("<div" in raw_content or "<br" in raw_content or "<p" in raw_content):
+                        # Strip HTML tags to get clean text
+                        soup = BeautifulSoup(raw_content, "html.parser")
+                        final_content = soup.get_text(separator="\n", strip=True)
+                    else:
+                        final_content = raw_content
+                except Exception as e:
+                    logger.error(f"HTML Clean Error: {e}")
+                    final_content = raw_content 
+                # ---------------------------
 
             # ANALYZE
             full_text = f"{final_subject}\n\n{final_content}"
@@ -140,7 +149,7 @@ def webhook():
                 "suggestions": ["Hi", "Dashboard"]
             })
             
-        # --- SCENARIO 4: Fallback (Raw Text) ---
+        # 4. Fallback
         analysis = analyze_text(user_text)
         return jsonify({
             "replies": [
@@ -160,7 +169,6 @@ def webhook():
 # ------------------------------------------------------------------
 @app.route("/")
 def index():
-    # Points to your templates/dashboard.html
     return render_template("dashboard.html")
 
 @app.route("/api/history")

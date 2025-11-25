@@ -12,8 +12,8 @@ API_BASE_INF = "https://api-inference.huggingface.co/models"
 API_URL_SUM = f"{API_BASE_INF}/facebook/bart-large-cnn"
 # 2. Sentiment (Stable)
 API_URL_TONE = f"{API_BASE_INF}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# 3. AI Reply Generation (SWITCHED TO STABLE LLAMA-2 MODEL)
-API_URL_GEN = f"{API_BASE_INF}/meta-llama/Llama-2-7b-chat-hf" 
+# 3. AI Reply Generation (SWITCHED TO FAST, STABLE GEMMA MODEL)
+API_URL_GEN = f"{API_BASE_INF}/google/gemma-2b-it" 
 
 # --- KEYWORDS ---
 URGENT_KEYWORDS = [
@@ -150,10 +150,11 @@ def generate_reply(tone, urgency, summary):
     elif tone == "Negative": instruction = "Write an empathetic apology email addressing frustration."
     elif urgency == "High" or tone == "Urgent": instruction = "Write a reassuring email regarding the urgent issue. State that it is prioritized."
     
-    # Llama-2 Prompt Format (Adjusted)
-    prompt = f"[INST] <<SYS>>You are a helpful customer support agent. Keep the reply concise (max 75 words). Sign off as 'Support Team'.<</SYS>>\n\nBased on this summary and sentiment:\nSummary: '{summary}'\nSentiment: {tone}\nTask: {instruction} [/INST]"
+    # Gemma/Llama Prompt Format 
+    # System prompt is now clearer for better instruction following
+    prompt = f"<|im_start|>system\nYou are a helpful customer support agent. Your goal is to write a professional email reply based on the summary and sentiment provided. Keep the reply concise (max 75 words). Sign off as 'Support Team'.\n<|im_end|>\n<|im_start|>user\nSummary: '{summary}'\nSentiment: {tone}\nTask: {instruction}\n<|im_end|>\n<|im_start|>assistant|>"
     
-    # Try AI with much longer timeout (120s) and 3 retries
+    # Try AI with 120s timeout and 3 retries
     result = query_hf_api({
         "inputs": prompt,
         "parameters": {
@@ -165,10 +166,13 @@ def generate_reply(tone, urgency, summary):
     }, API_URL_GEN, retries=3, timeout=120) 
 
     if result and isinstance(result, list) and 'generated_text' in result[0]:
-        # Clean up Llama's common [INST] repetition artifacts
+        # Clean up the response format
         raw_text = result[0]['generated_text'].strip()
-        cleaned_text = re.sub(r'\[/INST\]', '', raw_text).strip()
-        return cleaned_text
+        # Gemma/Llama models sometimes repeat the prompt; we filter that out.
+        if raw_text.startswith(prompt):
+            raw_text = raw_text[len(prompt):].strip()
+        
+        return raw_text
     
     # --- 2. TEMPLATE FALLBACK ---
     if tone == "Positive":

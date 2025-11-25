@@ -12,8 +12,8 @@ API_BASE_INF = "https://api-inference.huggingface.co/models"
 API_URL_SUM = f"{API_BASE_INF}/facebook/bart-large-cnn"
 # 2. Sentiment (Stable)
 API_URL_TONE = f"{API_BASE_INF}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# 3. AI Reply Generation (Zephyr model via standard endpoint)
-API_URL_GEN = f"{API_BASE_INF}/HuggingFaceH4/zephyr-7b-beta" 
+# 3. AI Reply Generation (SWITCHED TO STABLE LLAMA-2 MODEL)
+API_URL_GEN = f"{API_BASE_INF}/meta-llama/Llama-2-7b-chat-hf" 
 
 # --- KEYWORDS ---
 URGENT_KEYWORDS = [
@@ -42,9 +42,9 @@ def first_n_sentences(text, n=2):
     sentences = simple_sentence_split(text)
     return " ".join(sentences[:n])
 
-def query_hf_api(payload, api_url, retries=1, timeout=40): # Increased base timeout to 40s
+def query_hf_api(payload, api_url, retries=1, timeout=40):
     """
-    Robust API Query: Used for all HF API calls.
+    Robust API Query with increased retries and timeout for free tier stability.
     """
     if not HF_TOKEN:
         print("⚠️ HF_TOKEN missing")
@@ -64,10 +64,11 @@ def query_hf_api(payload, api_url, retries=1, timeout=40): # Increased base time
             if response.status_code == 503:
                 data = response.json()
                 wait_time = data.get("estimated_time", 15)
+                print(f"⏳ Model loading... Waiting {wait_time:.1f}s (Attempt {attempt+1})")
                 time.sleep(wait_time) 
                 continue 
             
-            # Log the fast failure status code (e.g., 404 or 401)
+            # Log the fast failure status code (e.g., 404, 401, or 410)
             print(f"❌ Fast API Failure ({response.status_code}): Check endpoint or token.")
             return None
             
@@ -140,7 +141,7 @@ def extract_key_points(text):
 
 def generate_reply(tone, urgency, summary):
     """
-    Tries AI Generation first (with a much longer timeout), falls back to stable templates.
+    Tries AI Generation with stable Llama-2 model.
     """
     
     # --- 1. AI GENERATION ATTEMPT ---
@@ -149,21 +150,10 @@ def generate_reply(tone, urgency, summary):
     elif tone == "Negative": instruction = "Write an empathetic apology email addressing frustration."
     elif urgency == "High" or tone == "Urgent": instruction = "Write a reassuring email regarding the urgent issue. State that it is prioritized."
     
-    # Zephyr Prompt Format
-    prompt = f"""<|system|>
-    You are a helpful customer support agent.
-    Your goal is to write a professional email reply based on the summary and sentiment provided.
-    Sign off as 'Support Team'.
-    </s>
-    <|user|>
-    Summary: "{summary}"
-    Sentiment: {tone}
-    Task: {instruction}
-    Keep it concise (max 75 words).
-    </s>
-    <|assistant|>"""
+    # Llama-2 Prompt Format (Adjusted)
+    prompt = f"[INST] <<SYS>>You are a helpful customer support agent. Keep the reply concise (max 75 words). Sign off as 'Support Team'.<</SYS>>\n\nBased on this summary and sentiment:\nSummary: '{summary}'\nSentiment: {tone}\nTask: {instruction} [/INST]"
     
-    # Try AI with much longer timeout (90s) and 2 retries
+    # Try AI with much longer timeout (120s) and 3 retries
     result = query_hf_api({
         "inputs": prompt,
         "parameters": {
@@ -172,10 +162,13 @@ def generate_reply(tone, urgency, summary):
             "temperature": 0.7,
             "top_p": 0.9
         }
-    }, API_URL_GEN, retries=2, timeout=90) 
+    }, API_URL_GEN, retries=3, timeout=120) 
 
     if result and isinstance(result, list) and 'generated_text' in result[0]:
-        return result[0]['generated_text'].strip()
+        # Clean up Llama's common [INST] repetition artifacts
+        raw_text = result[0]['generated_text'].strip()
+        cleaned_text = re.sub(r'\[/INST\]', '', raw_text).strip()
+        return cleaned_text
     
     # --- 2. TEMPLATE FALLBACK ---
     if tone == "Positive":

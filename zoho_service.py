@@ -7,10 +7,9 @@ TOKEN_CACHE = {"access_token": None, "expires_at": 0}
 ACCOUNT_ID_CACHE = None 
 EMAIL_LIST_CACHE = [] 
 
-# --- CONFIG ---
-# We will try these domains in order if one fails
-ZOHO_DOMAINS = ["https://mail.zoho.com", "https://mail.zoho.in", "https://mail.zoho.eu"]
-ACCOUNTS_URL = os.environ.get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.com").strip()
+# --- CONFIG (US .com) ---
+API_DOMAIN = "https://mail.zoho.com"
+ACCOUNTS_URL = "https://accounts.zoho.com"
 
 def get_access_token():
     global TOKEN_CACHE
@@ -39,71 +38,68 @@ def get_account_id():
     global ACCOUNT_ID_CACHE
     if ACCOUNT_ID_CACHE: return ACCOUNT_ID_CACHE
     
-    # 1. Try Env Var
+    # Try Env
     env_id = os.environ.get("ZOHO_ACCOUNT_ID", "").strip()
     if env_id:
         ACCOUNT_ID_CACHE = env_id
         return env_id
         
-    # 2. Auto-detect via API (Try all regions)
+    # Auto-detect
     token = get_access_token()
     if not token: return None
-    
-    for domain in ZOHO_DOMAINS:
-        try:
-            url = f"{domain}/api/accounts"
-            headers = {"Authorization": f"Zoho-oauthtoken {token}"}
-            resp = requests.get(url, headers=headers, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                if "data" in data and len(data["data"]) > 0:
-                    real_id = str(data["data"][0].get("accountId"))
-                    ACCOUNT_ID_CACHE = real_id
-                    return real_id
-        except: continue
-        
+    try:
+        url = f"{API_DOMAIN}/api/accounts"
+        headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "data" in data and len(data["data"]) > 0:
+                real_id = str(data["data"][0].get("accountId"))
+                ACCOUNT_ID_CACHE = real_id
+                return real_id
+    except: pass
     return None
 
 def fetch_latest_emails(limit=5):
-    """Fetches email list"""
+    """Fetches emails AND captures Folder ID"""
     global EMAIL_LIST_CACHE
     token = get_access_token()
     account_id = get_account_id()
     
     if not token or not account_id: return []
 
-    # Use the first domain that works, or default to .com
-    base_domain = ZOHO_DOMAINS[0] 
-    
-    # Try finding the working domain for listing
-    for domain in ZOHO_DOMAINS:
-        url = f"{domain}/api/accounts/{account_id}/messages/view"
-        headers = {"Authorization": f"Zoho-oauthtoken {token}"}
-        params = {"limit": limit, "sortorder": "false"}
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                messages = data.get("data", [])
-                clean_list = []
-                for msg in messages:
-                    subject = msg.get("subject", "No Subject")
-                    clean_list.append({
-                        "subject": (subject[:25] + '..') if len(subject) > 25 else subject,
-                        "full_subject": subject,
-                        "messageId": msg.get("messageId")
-                    })
-                EMAIL_LIST_CACHE = clean_list
-                return clean_list
-        except: continue
-            
+    url = f"{API_DOMAIN}/api/accounts/{account_id}/messages/view"
+    headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+    params = {"limit": limit, "sortorder": "false"}
+
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            messages = data.get("data", [])
+            clean_list = []
+            for msg in messages:
+                subject = msg.get("subject", "No Subject")
+                clean_list.append({
+                    "subject": (subject[:25] + '..') if len(subject) > 25 else subject,
+                    "full_subject": subject,
+                    "messageId": msg.get("messageId"),
+                    "folderId": msg.get("folderId") # <--- THIS IS KEY
+                })
+            EMAIL_LIST_CACHE = clean_list
+            return clean_list
+    except Exception as e:
+        print(f"❌ List Error: {e}")
     return []
 
-def find_message_id_by_subject(user_text):
-    """Matches text to ID"""
+# --- THIS IS THE FUNCTION YOUR APP.PY IS LOOKING FOR ---
+def find_message_data_by_subject(user_text):
+    """
+    Returns (messageId, full_subject, folderId)
+    """
     global EMAIL_LIST_CACHE
     
-    # Refresh if empty
+    # Refresh cache if empty
     if not EMAIL_LIST_CACHE:
         fetch_latest_emails(limit=5)
 
@@ -112,50 +108,38 @@ def find_message_id_by_subject(user_text):
     for email in EMAIL_LIST_CACHE:
         subj = email['subject'].lower()
         full_subj = email['full_subject'].lower()
+        
+        # Match button text OR full subject
         if clean_input == subj.rstrip(".") or clean_input in full_subj:
-            return email['messageId'], email['full_subject']
+            # RETURN ALL 3 VALUES
+            return email['messageId'], email['full_subject'], email.get('folderId')
 
-    # If cache miss, return None (force manual search not implemented to keep it simple)
-    return None, None
+    return None, None, None
 
-def get_full_email_content(message_id):
+def get_full_email_content(message_id, folder_id):
     """
-    REGION-SMART FETCH:
-    Tries .com -> .in -> .eu automatically to get the REAL body.
+    Uses Folder ID to fetch content (Fixes 404 on US accounts)
     """
     token = get_access_token()
     account_id = get_account_id()
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
     
-    print(f"📥 Fetching content for {message_id}...")
-
-    # CYCLE THROUGH REGIONS
-    for domain in ZOHO_DOMAINS:
-        url = f"{domain}/api/accounts/{account_id}/messages/{message_id}/content"
-        try:
-            resp = requests.get(url, headers=headers, timeout=8)
+    # Explicit Folder URL
+    url = f"{API_DOMAIN}/api/accounts/{account_id}/folders/{folder_id}/messages/{message_id}/content"
+    
+    try:
+        print(f"📥 Fetching content from Folder {folder_id}...")
+        resp = requests.get(url, headers=headers, timeout=12)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            inner = data.get("data", {})
+            content = inner.get("content") or inner.get("body")
+            return {"subject": inner.get("subject", ""), "content": content}
+        else:
+            print(f"❌ Content Failed ({resp.status_code}): {resp.text}")
             
-            if resp.status_code == 200:
-                data = resp.json()
-                inner = data.get("data", {})
-                
-                # We found it!
-                real_subject = inner.get("subject", "No Subject")
-                real_content = inner.get("content") or inner.get("body")
-                
-                if not real_content:
-                    real_content = "Email has no text body (Empty)."
-                    
-                print(f"✅ Found content on {domain}")
-                return {"subject": real_subject, "content": real_content}
-                
-            elif resp.status_code == 404:
-                # 404 means "Not found on this server", so we try the next region (.in)
-                continue
-                
-        except Exception as e:
-            print(f"⚠️ Error checking {domain}: {e}")
-            continue
+    except Exception as e:
+        print(f"❌ Content Exception: {e}")
 
-    print("❌ Failed to find content on any region.")
     return None

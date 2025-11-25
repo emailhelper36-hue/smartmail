@@ -11,7 +11,8 @@ API_BASE = "https://router.huggingface.co"
 API_URL_SUM = f"{API_BASE}/facebook/bart-large-cnn"
 # 2. Sentiment (Stable)
 API_URL_TONE = f"{API_BASE}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# Removed API_URL_GEN
+# 3. AI Reply Generation (Restored Zephyr model)
+API_URL_GEN = f"{API_BASE}/HuggingFaceH4/zephyr-7b-beta" 
 
 # --- KEYWORDS ---
 URGENT_KEYWORDS = [
@@ -40,9 +41,9 @@ def first_n_sentences(text, n=2):
     sentences = simple_sentence_split(text)
     return " ".join(sentences[:n])
 
-def query_hf_api(payload, api_url, retries=1):
+def query_hf_api(payload, api_url, retries=1, timeout=20):
     """
-    Robust API Query: Used only for stable models (Summary, Tone).
+    Robust API Query: Used for all HF API calls.
     """
     if not HF_TOKEN:
         print("⚠️ HF_TOKEN missing")
@@ -52,13 +53,13 @@ def query_hf_api(payload, api_url, retries=1):
     
     for attempt in range(retries + 1):
         try:
-            # Use lower timeout since these models are fast/stable
-            response = requests.post(api_url, headers=headers, json=payload, timeout=20)
+            # Use specified timeout
+            response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
             
             if response.status_code == 200:
                 return response.json()
             
-            # 503 handling remains for large summary model
+            # 503 (Model Loading) Handling
             if response.status_code == 503:
                 data = response.json()
                 wait_time = data.get("estimated_time", 15)
@@ -95,7 +96,7 @@ def get_tone_urgency(text):
             urgency = "High"
             break
             
-    # 2. TONE
+    # 2. TONE (Hybrid)
     tone = "Neutral"
     neg_count = sum(1 for w in TONE_KEYWORDS["angry"] if re.search(rf"\b{re.escape(w)}\b", text_lower))
     pos_count = sum(1 for w in TONE_KEYWORDS["positive"] if re.search(rf"\b{re.escape(w)}\b", text_lower))
@@ -135,9 +136,45 @@ def extract_key_points(text):
     return key_points[:3]
 
 def generate_reply(tone, urgency, summary):
-    """Uses Template Replies (The stable way)"""
+    """
+    Tries AI Generation first (with a longer timeout), falls back to stable templates.
+    """
     
-    # --- TEMPLATE REPLIES ---
+    # --- 1. AI GENERATION ATTEMPT ---
+    instruction = "Write a polite customer support email reply."
+    if tone == "Positive": instruction = "Write a warm 'Thank You' email acknowledging positive feedback."
+    elif tone == "Negative": instruction = "Write an empathetic apology email addressing frustration."
+    elif urgency == "High" or tone == "Urgent": instruction = "Write a reassuring email regarding the urgent issue. State that it is prioritized."
+    
+    # Zephyr Prompt Format
+    prompt = f"""<|system|>
+    You are a helpful customer support agent.
+    Your goal is to write a professional email reply based on the summary and sentiment provided.
+    Sign off as 'Support Team'.
+    </s>
+    <|user|>
+    Summary: "{summary}"
+    Sentiment: {tone}
+    Task: {instruction}
+    Keep it concise (max 75 words).
+    </s>
+    <|assistant|>"""
+    
+    # Try AI with much longer timeout for cold start
+    result = query_hf_api({
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 200, 
+            "return_full_text": False, 
+            "temperature": 0.7,
+            "top_p": 0.9
+        }
+    }, API_URL_GEN, retries=2, timeout=60) # Increased timeout to 60s
+
+    if result and isinstance(result, list) and 'generated_text' in result[0]:
+        return result[0]['generated_text'].strip()
+    
+    # --- 2. TEMPLATE FALLBACK ---
     if tone == "Positive":
         return "Thank you so much for your kind words! We are thrilled to hear your feedback and have shared it with the entire team. Thanks for being a great customer!\n\nBest regards,\nSupport Team"
     elif tone == "Negative":
@@ -145,7 +182,6 @@ def generate_reply(tone, urgency, summary):
     elif urgency == "High" or tone == "Urgent":
         return "We have received your urgent request. Our team has been notified and is prioritizing your case. Expect an update very soon.\n\nBest regards,\nSupport Team"
     
-    # Acknowledge the email by referencing the summary (for Neutral tone)
     return f"Thank you for your email, which we summarized as: '{summary}'. We have received your message and will respond to your inquiry shortly.\n\nBest regards,\nSupport Team"
 
 

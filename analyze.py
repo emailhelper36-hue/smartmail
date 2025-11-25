@@ -5,14 +5,15 @@ import time
 
 # --- CONFIGURATION ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
-API_BASE = "https://router.huggingface.co"
+# Changed to the stable Inference API base
+API_BASE_INF = "https://api-inference.huggingface.co/models"
 
 # 1. Summarization (Stable)
-API_URL_SUM = f"{API_BASE}/facebook/bart-large-cnn"
+API_URL_SUM = f"{API_BASE_INF}/facebook/bart-large-cnn"
 # 2. Sentiment (Stable)
-API_URL_TONE = f"{API_BASE}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# 3. AI Reply Generation (Restored Zephyr model)
-API_URL_GEN = f"{API_BASE}/HuggingFaceH4/zephyr-7b-beta" 
+API_URL_TONE = f"{API_BASE_INF}/cardiffnlp/twitter-roberta-base-sentiment-latest"
+# 3. AI Reply Generation (Zephyr model via standard endpoint)
+API_URL_GEN = f"{API_BASE_INF}/HuggingFaceH4/zephyr-7b-beta" 
 
 # --- KEYWORDS ---
 URGENT_KEYWORDS = [
@@ -41,7 +42,7 @@ def first_n_sentences(text, n=2):
     sentences = simple_sentence_split(text)
     return " ".join(sentences[:n])
 
-def query_hf_api(payload, api_url, retries=1, timeout=35): # Timeout increased to 35s
+def query_hf_api(payload, api_url, retries=1, timeout=40): # Increased base timeout to 40s
     """
     Robust API Query: Used for all HF API calls.
     """
@@ -65,7 +66,9 @@ def query_hf_api(payload, api_url, retries=1, timeout=35): # Timeout increased t
                 wait_time = data.get("estimated_time", 15)
                 time.sleep(wait_time) 
                 continue 
-                
+            
+            # Log the fast failure status code (e.g., 404 or 401)
+            print(f"❌ Fast API Failure ({response.status_code}): Check endpoint or token.")
             return None
             
         except requests.exceptions.Timeout:
@@ -160,7 +163,7 @@ def generate_reply(tone, urgency, summary):
     </s>
     <|assistant|>"""
     
-    # Try AI with much longer timeout for cold start
+    # Try AI with much longer timeout (90s) and 2 retries
     result = query_hf_api({
         "inputs": prompt,
         "parameters": {
@@ -169,7 +172,7 @@ def generate_reply(tone, urgency, summary):
             "temperature": 0.7,
             "top_p": 0.9
         }
-    }, API_URL_GEN, retries=2, timeout=90) # Increased timeout to 90s
+    }, API_URL_GEN, retries=2, timeout=90) 
 
     if result and isinstance(result, list) and 'generated_text' in result[0]:
         return result[0]['generated_text'].strip()

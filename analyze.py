@@ -41,7 +41,7 @@ def first_n_sentences(text, n=2):
     sentences = simple_sentence_split(text)
     return " ".join(sentences[:n])
 
-def query_hf_api(payload, api_url, retries=1, timeout=20):
+def query_hf_api(payload, api_url, retries=1, timeout=35): # Timeout increased to 35s
     """
     Robust API Query: Used for all HF API calls.
     """
@@ -137,7 +137,7 @@ def extract_key_points(text):
 
 def generate_reply(tone, urgency, summary):
     """
-    Tries AI Generation first (with a longer timeout), falls back to stable templates.
+    Tries AI Generation first (with a much longer timeout), falls back to stable templates.
     """
     
     # --- 1. AI GENERATION ATTEMPT ---
@@ -169,7 +169,7 @@ def generate_reply(tone, urgency, summary):
             "temperature": 0.7,
             "top_p": 0.9
         }
-    }, API_URL_GEN, retries=2, timeout=60) # Increased timeout to 60s
+    }, API_URL_GEN, retries=2, timeout=90) # Increased timeout to 90s
 
     if result and isinstance(result, list) and 'generated_text' in result[0]:
         return result[0]['generated_text'].strip()

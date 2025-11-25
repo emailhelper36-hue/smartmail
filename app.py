@@ -65,9 +65,8 @@ def save_analysis_doc(payload):
 # ------------------------------------------------------------------
 # 2. WEBHOOK
 # ------------------------------------------------------------------
-# ... (Imports and Firebase setup remain the same) ...
+# ... (Imports and Setup same as before) ...
 
-# --- WEBHOOK ---
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -83,7 +82,7 @@ def webhook():
         # 1. Dashboard
         if user_text.lower() == "dashboard":
              return jsonify({
-                "replies": [{"text": f"📊 **SmartMail Dashboard:**\n{request.host_url}"}],
+                "replies": [{"text": f"📊 **Dashboard:**\n{request.host_url}"}],
                 "suggestions": ["Hi"]
             })
 
@@ -96,21 +95,20 @@ def webhook():
                 "suggestions": suggestions
             })
 
-        # 3. Analyze Email
-        # Get ID and Subject from Cache
-        msg_id, cache_subject = zoho_service.find_message_id_by_subject(user_text)
+        # 3. Analyze Email (The Update)
+        # We now get the Folder ID
+        msg_id, full_subject, folder_id = zoho_service.find_message_data_by_subject(user_text)
         
         if msg_id:
-            # FETCH CONTENT (Now tries multiple regions to find the real body)
-            email_data = zoho_service.get_full_email_content(msg_id)
+            # PASS FOLDER ID TO CONTENT FETCH
+            email_data = zoho_service.get_full_email_content(msg_id, folder_id)
             
             if email_data:
                 final_subject = email_data['subject']
                 final_content = email_data['content']
             else:
-                # If truly unreadable after trying all servers
-                final_subject = cache_subject or user_text
-                final_content = "Could not retrieve email body. (Check permissions)."
+                final_subject = full_subject or user_text
+                final_content = "Content unavailable."
 
             # ANALYZE
             full_text = f"{final_subject}\n\n{final_content}"
@@ -154,7 +152,7 @@ def webhook():
         logger.error(f"Webhook Error: {traceback.format_exc()}")
         return jsonify({"replies": [{"text": "⚠️ System Error."}]})
 
-# ... (Dashboard routes remain the same) ...
+# ... (Routes remain same) ...
 # 3. DASHBOARD ROUTES
 # ------------------------------------------------------------------
 @app.route("/")

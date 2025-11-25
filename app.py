@@ -65,58 +65,58 @@ def save_analysis_doc(payload):
 # ------------------------------------------------------------------
 # 2. WEBHOOK
 # ------------------------------------------------------------------
+# ... (Imports and Firebase setup remain the same) ...
+
+# --- WEBHOOK ---
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
         
-        # Extract Text Safely
         user_text = ""
         if "message" in data and isinstance(data["message"], dict):
             user_text = data["message"].get("text", "")
         elif "visitor" in data:
              user_text = data["visitor"].get("message", "")
-        
         user_text = str(user_text).strip()
         
-        # --- SCENARIO 1: Dashboard Link ---
+        # 1. Dashboard
         if user_text.lower() == "dashboard":
              return jsonify({
                 "replies": [{"text": f"📊 **SmartMail Dashboard:**\n{request.host_url}"}],
                 "suggestions": ["Hi"]
             })
 
-        # --- SCENARIO 2: Greeting (List Emails) ---
+        # 2. Greeting
         if not user_text or user_text.lower() in ["hi", "hello", "start", "menu"]:
             emails = zoho_service.fetch_latest_emails(limit=5)
             suggestions = [e['subject'] for e in emails]
-            
             return jsonify({
                 "replies": [{"text": "👋 **Hello!** Select an email to analyze:"}],
                 "suggestions": suggestions
             })
 
-        # --- SCENARIO 3: Analyze Email (Button Click) ---
-        # 1. Find ID and REAL Subject (Fixes Truncated Subject Bug)
-        msg_id, full_subject_cache = zoho_service.find_message_data_by_subject(user_text)
+        # 3. Analyze Email
+        # Get ID and Subject from Cache
+        msg_id, cache_subject = zoho_service.find_message_id_by_subject(user_text)
         
         if msg_id:
-            # 2. Fetch Content (With Fallback logic from zoho_service)
+            # FETCH CONTENT (Now tries multiple regions to find the real body)
             email_data = zoho_service.get_full_email_content(msg_id)
             
-            # 3. Determine Final Subject (API > Cache > User Input)
-            final_subject = (email_data and email_data['subject']) or full_subject_cache or user_text
-            
-            # 4. Determine Final Content
-            final_content = "Content unavailable."
-            if email_data and email_data.get('content'):
+            if email_data:
+                final_subject = email_data['subject']
                 final_content = email_data['content']
+            else:
+                # If truly unreadable after trying all servers
+                final_subject = cache_subject or user_text
+                final_content = "Could not retrieve email body. (Check permissions)."
 
-            # 5. Analyze
+            # ANALYZE
             full_text = f"{final_subject}\n\n{final_content}"
             analysis = analyze_text(full_text)
             
-            # 6. Save to Firebase
+            # SAVE
             doc = {
                 "messageId": msg_id,
                 "subject": final_subject,
@@ -129,7 +129,6 @@ def webhook():
             }
             save_analysis_doc(doc)
 
-            # 7. Respond to Bot
             return jsonify({
                 "replies": [
                     {"text": f"✅ **{doc['subject']}**"},
@@ -140,7 +139,7 @@ def webhook():
                 "suggestions": ["Hi", "Dashboard"]
             })
             
-        # --- SCENARIO 4: Fallback (Raw Text) ---
+        # 4. Fallback
         analysis = analyze_text(user_text)
         return jsonify({
             "replies": [
@@ -155,7 +154,7 @@ def webhook():
         logger.error(f"Webhook Error: {traceback.format_exc()}")
         return jsonify({"replies": [{"text": "⚠️ System Error."}]})
 
-# ------------------------------------------------------------------
+# ... (Dashboard routes remain the same) ...
 # 3. DASHBOARD ROUTES
 # ------------------------------------------------------------------
 @app.route("/")

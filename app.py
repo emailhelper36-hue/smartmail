@@ -11,6 +11,7 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
 # --- CUSTOM MODULES ---
+# Make sure zoho_service.py and analyze.py are in the same folder!
 import zoho_service
 from analyze import analyze_text 
 import firebase_admin
@@ -65,44 +66,46 @@ def save_analysis_doc(payload):
 # ------------------------------------------------------------------
 # 2. WEBHOOK
 # ------------------------------------------------------------------
-# ... (Imports and Setup same as before) ...
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
         
+        # Extract User Text Safely
         user_text = ""
         if "message" in data and isinstance(data["message"], dict):
             user_text = data["message"].get("text", "")
         elif "visitor" in data:
              user_text = data["visitor"].get("message", "")
+        
         user_text = str(user_text).strip()
         
-        # 1. Dashboard
+        # --- SCENARIO 1: Dashboard Link ---
         if user_text.lower() == "dashboard":
              return jsonify({
                 "replies": [{"text": f"📊 **Dashboard:**\n{request.host_url}"}],
                 "suggestions": ["Hi"]
             })
 
-        # 2. Greeting
+        # --- SCENARIO 2: Greeting (List Emails) ---
         if not user_text or user_text.lower() in ["hi", "hello", "start", "menu"]:
             emails = zoho_service.fetch_latest_emails(limit=5)
             suggestions = [e['subject'] for e in emails]
+            
             return jsonify({
                 "replies": [{"text": "👋 **Hello!** Select an email to analyze:"}],
                 "suggestions": suggestions
             })
 
-        # 3. Analyze Email (The Update)
-        # We now get the Folder ID
+        # --- SCENARIO 3: Analyze Email (Button Click) ---
+        # FIX: We now unpack 3 values (ID, Subject, FolderID)
         msg_id, full_subject, folder_id = zoho_service.find_message_data_by_subject(user_text)
         
         if msg_id:
-            # PASS FOLDER ID TO CONTENT FETCH
+            # FIX: We pass the FolderID to get content
             email_data = zoho_service.get_full_email_content(msg_id, folder_id)
             
+            # Determine Final Data
             if email_data:
                 final_subject = email_data['subject']
                 final_content = email_data['content']
@@ -137,7 +140,7 @@ def webhook():
                 "suggestions": ["Hi", "Dashboard"]
             })
             
-        # 4. Fallback
+        # --- SCENARIO 4: Fallback (Raw Text) ---
         analysis = analyze_text(user_text)
         return jsonify({
             "replies": [
@@ -152,12 +155,12 @@ def webhook():
         logger.error(f"Webhook Error: {traceback.format_exc()}")
         return jsonify({"replies": [{"text": "⚠️ System Error."}]})
 
-# ... (Routes remain same) ...
+# ------------------------------------------------------------------
 # 3. DASHBOARD ROUTES
 # ------------------------------------------------------------------
 @app.route("/")
 def index():
-    # UPDATED: Now points to dashboard.html
+    # Points to your templates/dashboard.html
     return render_template("dashboard.html")
 
 @app.route("/api/history")

@@ -7,12 +7,11 @@ import time
 HF_TOKEN = os.environ.get("HF_TOKEN")
 API_BASE = "https://router.huggingface.co"
 
-# 1. Summarization
+# 1. Summarization (Stable)
 API_URL_SUM = f"{API_BASE}/facebook/bart-large-cnn"
-# 2. Sentiment
+# 2. Sentiment (Stable)
 API_URL_TONE = f"{API_BASE}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# 3. Reply Generation (Zephyr is faster/more reliable on free tier than Mistral)
-API_URL_GEN = f"{API_BASE}/HuggingFaceH4/zephyr-7b-beta"
+# Removed API_URL_GEN
 
 # --- KEYWORDS ---
 URGENT_KEYWORDS = [
@@ -43,7 +42,7 @@ def first_n_sentences(text, n=2):
 
 def query_hf_api(payload, api_url, retries=1):
     """
-    Robust API Query with extended patience for free tier.
+    Robust API Query: Used only for stable models (Summary, Tone).
     """
     if not HF_TOKEN:
         print("⚠️ HF_TOKEN missing")
@@ -53,27 +52,25 @@ def query_hf_api(payload, api_url, retries=1):
     
     for attempt in range(retries + 1):
         try:
-            # Increased to 60s because cold boots can take ~45s
-            response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+            # Use lower timeout since these models are fast/stable
+            response = requests.post(api_url, headers=headers, json=payload, timeout=20)
             
             if response.status_code == 200:
                 return response.json()
             
-            # Handle 503 (Model Loading)
+            # 503 handling remains for large summary model
             if response.status_code == 503:
                 data = response.json()
-                wait_time = data.get("estimated_time", 20)
-                print(f"⏳ Model loading... Waiting {wait_time:.1f}s (Attempt {attempt+1})")
-                time.sleep(wait_time) # Wait the FULL duration requested
+                wait_time = data.get("estimated_time", 15)
+                time.sleep(wait_time) 
                 continue 
                 
-            print(f"⚠️ API Error {response.status_code}: {response.text}")
             return None
             
         except requests.exceptions.Timeout:
-            print(f"⏰ Request timed out (Attempt {attempt+1})")
-        except Exception as e:
-            print(f"❌ Connection Error: {e}")
+            pass
+        except Exception:
+            pass
             
     return None
 
@@ -125,57 +122,6 @@ def get_tone_urgency(text):
 
     return tone, urgency
 
-def generate_reply(text, tone, urgency, summary):
-    """Generate Reply using Zephyr"""
-    
-    instruction = "Write a polite customer support email reply."
-    if tone == "Positive": instruction = "Write a warm 'Thank You' email acknowledging positive feedback."
-    elif tone == "Negative": instruction = "Write an empathetic apology email addressing frustration."
-    elif urgency == "High": instruction = "Write a reassuring email regarding the urgent issue."
-    
-    # Zephyr/Mistral Prompt Format
-    prompt = f"""<|system|>
-    You are a helpful customer support agent.
-    Your goal is to write a professional email reply based on the summary and sentiment provided.
-    Sign off as 'Support Team'.
-    </s>
-    <|user|>
-    Summary: "{summary}"
-    Sentiment: {tone}
-    Task: {instruction}
-    Keep it concise (under 100 words).
-    </s>
-    <|assistant|>"""
-
-    print("🤖 Asking AI to generate reply...") # Debug Log
-    
-    # 2 Retries for generation
-    result = query_hf_api({
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 200, 
-            "return_full_text": False, 
-            "temperature": 0.7,
-            "top_p": 0.9
-        }
-    }, API_URL_GEN, retries=2)
-    
-    if result and isinstance(result, list) and 'generated_text' in result[0]:
-        print("✅ AI Reply Generated Successfully")
-        return result[0]['generated_text'].strip()
-    
-    print("⚠️ AI Generation Failed. Using Fallback.")
-    
-    # --- FALLBACKS ---
-    if tone == "Positive":
-        return "Thank you so much for your kind words! We are thrilled to hear your feedback and have shared it with the entire team. Thanks for being a great customer!\n\nBest regards,\nSupport Team"
-    elif tone == "Negative":
-        return "We sincerely apologize for the experience you have had. This is not the standard we strive for. We are investigating this matter immediately.\n\nBest regards,\nSupport Team"
-    elif urgency == "High":
-        return "We have received your urgent request. Our team has been notified and is prioritizing your case. Expect an update very soon.\n\nBest regards,\nSupport Team"
-    
-    return "Thank you for your email. We have received your message and will respond shortly.\n\nBest regards,\nSupport Team"
-
 def extract_key_points(text):
     sentences = simple_sentence_split(text)
     key_points = []
@@ -187,6 +133,21 @@ def extract_key_points(text):
                 prefix = "❓ " if "?" in clean else "• "
                 key_points.append(f"{prefix}{clean}")
     return key_points[:3]
+
+def generate_reply(tone, urgency, summary):
+    """Uses Template Replies (The stable way)"""
+    
+    # --- TEMPLATE REPLIES ---
+    if tone == "Positive":
+        return "Thank you so much for your kind words! We are thrilled to hear your feedback and have shared it with the entire team. Thanks for being a great customer!\n\nBest regards,\nSupport Team"
+    elif tone == "Negative":
+        return "We sincerely apologize for the experience you have had. This is not the standard we strive for. We are investigating this matter immediately.\n\nBest regards,\nSupport Team"
+    elif urgency == "High" or tone == "Urgent":
+        return "We have received your urgent request. Our team has been notified and is prioritizing your case. Expect an update very soon.\n\nBest regards,\nSupport Team"
+    
+    # Acknowledge the email by referencing the summary (for Neutral tone)
+    return f"Thank you for your email, which we summarized as: '{summary}'. We have received your message and will respond to your inquiry shortly.\n\nBest regards,\nSupport Team"
+
 
 # --- MAIN FUNCTION ---
 def analyze_text(text):
@@ -200,7 +161,7 @@ def analyze_text(text):
     
     summary = get_summary(clean_text)
     tone, urgency = get_tone_urgency(clean_text)
-    reply = generate_reply(clean_text, tone, urgency, summary)
+    reply = generate_reply(tone, urgency, summary)
     key_points = extract_key_points(clean_text)
     
     return {

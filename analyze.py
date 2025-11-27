@@ -31,7 +31,7 @@ def simple_sentence_split(text):
 
 def query_openrouter_json(system_prompt, user_prompt):
     """
-    Queries OpenRouter and expects a JSON response.
+    Queries OpenRouter. Removed strict JSON mode enforcement to fix 400 error.
     """
     if not OPENROUTER_API_KEY:
         print("⚠️ OPENROUTER_API_KEY is missing.")
@@ -43,9 +43,9 @@ def query_openrouter_json(system_prompt, user_prompt):
         "HTTP-Referer": OPENROUTER_REFERER_URL or "https://smartmail-bot.onrender.com"
     }
     
-    print(f"🤖 Using Model: {OPENROUTER_MODEL}") # Debug log to confirm model
+    print(f"🤖 Using Model: {OPENROUTER_MODEL}") 
 
-    # FIX: Combine System and User prompts because Gemma 3n throws 400 Error on 'system' role
+    # Combined prompt for models that don't support 'system' role well
     combined_prompt = f"{system_prompt}\n\n---\n\nTask Context:\n{user_prompt}"
 
     payload = {
@@ -55,7 +55,8 @@ def query_openrouter_json(system_prompt, user_prompt):
         ],
         "temperature": 0.3, 
         "max_tokens": 300,
-        "response_format": { "type": "json_object" } 
+        # REMOVED: "response_format": { "type": "json_object" } 
+        # This caused the 400 error on Gemma 3n
     }
     
     try:
@@ -65,8 +66,11 @@ def query_openrouter_json(system_prompt, user_prompt):
             data = response.json()
             if data.get('choices'):
                 content = data['choices'][0]['message']['content'].strip()
-                if content.startswith("```json"):
-                    content = content.replace("```json", "").replace("```", "")
+                # Clean up markdown code blocks if the model adds them
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.replace("```", "").strip()
                 return content
         
         print(f"❌ OpenRouter Error ({response.status_code}): {response.text}")
@@ -99,7 +103,7 @@ def analyze_text(text):
         "key_points": ["List of 1-3 key action items or important details"],
         "suggested_reply": "A concise, professional response (under 75 words) signed off as 'Support Team'"
     }
-    Do not include any extra text or markdown. Just the JSON."""
+    IMPORTANT: Output ONLY the raw JSON. Do not use Markdown formatting."""
 
     user_prompt = f"Analyze this email content:\n\n{clean_text}"
 
@@ -127,6 +131,6 @@ def analyze_text(text):
         except json.JSONDecodeError:
             print(f"⚠️ Failed to parse JSON from AI: {result_json_str}")
             result["summary"] = "AI format error"
-            result["suggested_reply"] = result_json_str[:200]
+            result["suggested_reply"] = result_json_str[:200] # Show raw output for debugging
 
     return result

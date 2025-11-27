@@ -3,82 +3,382 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartMail Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-        body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; margin: 0; padding: 20px; }
-        .container { max-width: 1000px; margin: 0 auto; }
-        h1 { background: linear-gradient(90deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 30px; }
-        
-        .card-grid { display: grid; gap: 20px; }
-        
-        .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; }
-        .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; }
-        
-        .subject { font-weight: 600; font-size: 1.1em; color: #fff; }
-        .badges { display: flex; gap: 10px; }
-        .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; }
-        
-        .b-urgent-High { background: #ef4444; color: white; }
-        .b-urgent-Low { background: #3b82f6; color: white; }
-        
-        .b-tone-Negative { background: #f59e0b; color: black; }
-        .b-tone-Positive { background: #10b981; color: white; }
-        .b-tone-Neutral { background: #64748b; color: white; }
-        
-        .section-title { font-size: 0.85em; text-transform: uppercase; color: #94a3b8; margin: 10px 0 5px; }
-        .text-block { background: #0f172a; padding: 10px; border-radius: 6px; font-size: 0.95em; line-height: 1.5; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>SmartMail Analysis History</h1>
-        <div id="content" class="card-grid">
-            <div style="text-align: center; color: #64748b;">Loading data...</div>
-        </div>
-    </div>
+    <title>SmartMail | Intelligence Dashboard</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
     <script>
-        async function loadData() {
-            try {
-                const res = await fetch('/api/history');
-                const data = await res.json();
-                const container = document.getElementById('content');
-                
-                if(data.length === 0) {
-                    container.innerHTML = '<div style="text-align: center;">No analyses saved yet. Use the bot to analyze emails.</div>';
-                    return;
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        dark: {
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                            600: '#475569'
+                        },
+                        accent: {
+                            blue: '#3b82f6',
+                            red: '#ef4444',
+                            green: '#22c55e',
+                            yellow: '#eab308'
+                        }
+                    }
                 }
-
-                container.innerHTML = data.map(item => `
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="subject">${item.subject}</div>
-                            <div class="badges">
-                                <span class="badge b-urgent-${item.urgency}">${item.urgency} Urgency</span>
-                                <span class="badge b-tone-${item.tone}">${item.tone}</span>
-                            </div>
-                        </div>
-                        
-                        <div class="section-title">Summary</div>
-                        <div class="text-block">${item.summary}</div>
-                        
-                        <div class="section-title">Suggested Reply</div>
-                        <div class="text-block" style="color: #93c5fd;">${item.reply.replace(/\n/g, '<br>')}</div>
-                        
-                        <div style="margin-top: 10px; font-size: 0.8em; color: #64748b; text-align: right;">
-                            Analyzed: ${new Date(item.timestamp).toLocaleString()}
-                        </div>
-                    </div>
-                `).join('');
-                
-            } catch(e) {
-                console.error(e);
             }
         }
+    </script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+        .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex flex-col">
+
+    <!-- Navbar -->
+    <nav class="border-b border-dark-700 bg-dark-800/50 backdrop-blur-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 bg-gradient-to-tr from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/20">
+                        <i class="fa-solid fa-robot"></i>
+                    </div>
+                    <span class="font-bold text-xl tracking-tight text-white">SmartMail <span class="text-dark-600 font-light">AI</span></span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="flex items-center gap-2 text-xs font-medium text-dark-600 bg-dark-900 px-3 py-1.5 rounded-full border border-dark-700">
+                        <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                        System Online
+                    </div>
+                    <button onclick="fetchData()" class="text-dark-600 hover:text-white transition-colors p-2 rounded-full hover:bg-dark-700">
+                        <i class="fa-solid fa-rotate"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         
-        loadData();
-        setInterval(loadData, 1000000); // Refresh every 10s
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <!-- Total Emails -->
+            <div class="bg-dark-800 rounded-xl p-6 border border-dark-700 card-hover transition-all duration-300">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-xs font-medium text-dark-600 uppercase tracking-wider">Processed Emails</p>
+                        <h3 class="text-3xl font-bold text-white mt-1" id="totalCount">--</h3>
+                    </div>
+                    <div class="p-2 bg-blue-500/10 rounded-lg text-blue-500">
+                        <i class="fa-solid fa-envelope-open-text"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Urgent -->
+            <div class="bg-dark-800 rounded-xl p-6 border border-dark-700 card-hover transition-all duration-300">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-xs font-medium text-dark-600 uppercase tracking-wider">High Urgency</p>
+                        <h3 class="text-3xl font-bold text-accent-red mt-1" id="urgentCount">--</h3>
+                    </div>
+                    <div class="p-2 bg-red-500/10 rounded-lg text-red-500">
+                        <i class="fa-solid fa-fire"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Positive -->
+            <div class="bg-dark-800 rounded-xl p-6 border border-dark-700 card-hover transition-all duration-300">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-xs font-medium text-dark-600 uppercase tracking-wider">Positive Tone</p>
+                        <h3 class="text-3xl font-bold text-accent-green mt-1" id="positiveCount">--</h3>
+                    </div>
+                    <div class="p-2 bg-green-500/10 rounded-lg text-green-500">
+                        <i class="fa-solid fa-smile"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Negative -->
+            <div class="bg-dark-800 rounded-xl p-6 border border-dark-700 card-hover transition-all duration-300">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-xs font-medium text-dark-600 uppercase tracking-wider">Negative Tone</p>
+                        <h3 class="text-3xl font-bold text-accent-yellow mt-1" id="negativeCount">--</h3>
+                    </div>
+                    <div class="p-2 bg-yellow-500/10 rounded-lg text-yellow-500">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Layout Split -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Left Column: Recent Analysis Feed -->
+            <div class="lg:col-span-2 space-y-6">
+                <div class="flex items-center justify-between mb-2">
+                    <h2 class="text-lg font-semibold text-white">Recent Analysis Stream</h2>
+                    <span class="text-xs text-dark-600 bg-dark-800 px-2 py-1 rounded border border-dark-700">Live</span>
+                </div>
+                
+                <div id="feedContainer" class="space-y-4">
+                    <!-- Items will be injected here via JS -->
+                    <div class="text-center py-12 text-dark-600 animate-pulse-slow">
+                        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3"></i>
+                        <p>Connecting to Neural Network...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Charts -->
+            <div class="space-y-6">
+                <!-- Sentiment Chart -->
+                <div class="bg-dark-800 rounded-xl border border-dark-700 p-6">
+                    <h3 class="text-sm font-semibold text-dark-600 uppercase tracking-wider mb-6">Sentiment Distribution</h3>
+                    <div class="relative h-48 w-full flex justify-center">
+                        <canvas id="toneChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Urgency Chart -->
+                <div class="bg-dark-800 rounded-xl border border-dark-700 p-6">
+                    <h3 class="text-sm font-semibold text-dark-600 uppercase tracking-wider mb-6">Urgency Levels</h3>
+                    <div class="relative h-40 w-full">
+                        <canvas id="urgencyChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // --- Charts Configuration ---
+        Chart.defaults.color = '#64748b';
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        
+        let toneChartInstance = null;
+        let urgencyChartInstance = null;
+
+        function initCharts() {
+            // Tone Chart (Doughnut)
+            const ctxTone = document.getElementById('toneChart').getContext('2d');
+            toneChartInstance = new Chart(ctxTone, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Positive', 'Neutral', 'Negative'],
+                    datasets: [{
+                        data: [0, 0, 0],
+                        backgroundColor: ['#22c55e', '#475569', '#eab308'],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '75%',
+                    plugins: {
+                        legend: { position: 'right', labels: { usePointStyle: true, pointStyle: 'circle' } }
+                    }
+                }
+            });
+
+            // Urgency Chart (Bar)
+            const ctxUrgency = document.getElementById('urgencyChart').getContext('2d');
+            urgencyChartInstance = new Chart(ctxUrgency, {
+                type: 'bar',
+                data: {
+                    labels: ['Low', 'Medium', 'High'],
+                    datasets: [{
+                        label: 'Emails',
+                        data: [0, 0, 0],
+                        backgroundColor: ['#3b82f6', '#f59e0b', '#ef4444'],
+                        borderRadius: 4,
+                        barThickness: 20
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: '#334155', drawBorder: false } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+
+        // --- Fetch & Render Data ---
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/history');
+                const data = await response.json();
+
+                // 1. Calculate Stats
+                let stats = {
+                    total: data.length,
+                    high: 0, medium: 0, low: 0,
+                    positive: 0, negative: 0, neutral: 0
+                };
+
+                data.forEach(item => {
+                    // Urgency Stats
+                    const u = (item.urgency || 'Low').toLowerCase();
+                    if (u.includes('high')) stats.high++;
+                    else if (u.includes('medium')) stats.medium++;
+                    else stats.low++;
+
+                    // Tone Stats
+                    const t = (item.tone || 'Neutral').toLowerCase();
+                    if (t.includes('positive')) stats.positive++;
+                    else if (t.includes('negative') || t.includes('angry')) stats.negative++;
+                    else stats.neutral++;
+                });
+
+                // 2. Update DOM Counters
+                document.getElementById('totalCount').innerText = stats.total;
+                document.getElementById('urgentCount').innerText = stats.high;
+                document.getElementById('positiveCount').innerText = stats.positive;
+                document.getElementById('negativeCount').innerText = stats.negative;
+
+                // 3. Update Charts
+                if (toneChartInstance) {
+                    toneChartInstance.data.datasets[0].data = [stats.positive, stats.neutral, stats.negative];
+                    toneChartInstance.update();
+                }
+                if (urgencyChartInstance) {
+                    urgencyChartInstance.data.datasets[0].data = [stats.low, stats.medium, stats.high];
+                    urgencyChartInstance.update();
+                }
+
+                // 4. Render Feed
+                renderFeed(data);
+
+            } catch (error) {
+                console.error("Error fetching data:", error);
+            }
+        }
+
+        function renderFeed(items) {
+            const container = document.getElementById('feedContainer');
+            
+            if (items.length === 0) {
+                container.innerHTML = `<div class="text-center py-8 text-dark-600">No emails analyzed yet.</div>`;
+                return;
+            }
+
+            let html = '';
+            items.forEach((item, index) => {
+                const urgencyColor = item.urgency === 'High' ? 'text-red-500 bg-red-500/10 border-red-500/20' : 
+                                     (item.urgency === 'Medium' ? 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20' : 'text-blue-500 bg-blue-500/10 border-blue-500/20');
+                
+                const toneColor = (item.tone || 'Neutral').toLowerCase().includes('positive') ? 'text-green-400' : 
+                                  ((item.tone || 'Neutral').toLowerCase().includes('negative') ? 'text-red-400' : 'text-slate-400');
+
+                html += `
+                <div class="bg-dark-800 rounded-xl border border-dark-700 overflow-hidden transition-all hover:border-dark-600">
+                    <div class="p-5 cursor-pointer" onclick="toggleDetails('details-${index}')">
+                        <div class="flex justify-between items-start gap-4">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${urgencyColor}">
+                                        ${item.urgency || 'LOW'}
+                                    </span>
+                                    <span class="text-xs font-medium ${toneColor}">
+                                        <i class="fa-solid fa-tag mr-1"></i>${item.tone || 'Neutral'}
+                                    </span>
+                                    <span class="text-xs text-dark-600 ml-auto sm:hidden">
+                                        ${new Date(item.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                    </span>
+                                </div>
+                                <h3 class="text-white font-medium truncate pr-4">${item.subject || 'No Subject'}</h3>
+                                <p class="text-sm text-dark-600 mt-1 truncate">${item.summary || 'No summary available.'}</p>
+                            </div>
+                            <div class="hidden sm:block text-right">
+                                <span class="text-xs text-dark-600 block">
+                                    ${new Date(item.createdAt).toLocaleDateString()}
+                                </span>
+                                <span class="text-xs text-dark-600 block">
+                                    ${new Date(item.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Expandable Details -->
+                    <div id="details-${index}" class="hidden border-t border-dark-700 bg-dark-900/30 p-5 space-y-4">
+                        <div>
+                            <h4 class="text-xs font-semibold text-dark-600 uppercase mb-2">AI Summary</h4>
+                            <p class="text-sm text-slate-300 leading-relaxed">${item.summary}</p>
+                        </div>
+                        
+                        ${item.key_points && item.key_points.length > 0 ? `
+                        <div>
+                            <h4 class="text-xs font-semibold text-dark-600 uppercase mb-2">Key Points</h4>
+                            <ul class="text-sm text-slate-300 space-y-1">
+                                ${item.key_points.map(kp => `<li class="flex items-start gap-2"><span class="text-blue-500 mt-1">•</span><span>${kp.replace(/^[•❓]\s*/, '')}</span></li>`).join('')}
+                            </ul>
+                        </div>` : ''}
+
+                        <div>
+                            <h4 class="text-xs font-semibold text-dark-600 uppercase mb-2">Suggested Draft</h4>
+                            <div class="bg-dark-900 rounded-lg p-4 border border-dark-700 font-mono text-sm text-blue-300 leading-relaxed whitespace-pre-wrap">
+${item.suggested_reply}
+                            </div>
+                            <div class="mt-2 flex justify-end">
+                                <button onclick="copyToClipboard('${index}')" class="text-xs text-dark-600 hover:text-white flex items-center gap-1 transition-colors">
+                                    <i class="fa-regular fa-copy"></i> Copy Draft
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function toggleDetails(id) {
+            const el = document.getElementById(id);
+            if (el.classList.contains('hidden')) {
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+        }
+
+        function copyToClipboard(index) {
+            // Logic to copy draft text would go here
+            alert("Draft copied to clipboard!");
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            fetchData();
+            // Auto refresh every 5 seconds
+            setInterval(fetchData, 5000);
+        });
+
     </script>
 </body>
 </html>

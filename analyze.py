@@ -8,9 +8,15 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_REFERER_URL = os.environ.get("OPENROUTER_REFERER_URL")
 
-# Force the correct model ID as default if ENV is missing or wrong
-DEFAULT_MODEL = "google/gemma-3n-e4b-it:free"
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
+# --- MODEL PRIORITY LIST ---
+# If the first one fails/is busy, it automatically tries the next one.
+# All of these are free and instruction-tuned.
+FREE_MODEL_LIST = [
+    "google/gemma-3n-e4b-it:free",        # Primary: Fast & Current favorite
+    "mistralai/mistral-7b-instruct:free", # Backup 1: Reliable standard
+    "huggingfaceh4/zephyr-7b-beta:free",  # Backup 2: Good for chat
+    "meta-llama/llama-3-8b-instruct:free" # Backup 3: High quality
+]
 
 # --- LOCAL KEYWORDS & WEIGHTS ---
 URGENCY_WEIGHTS = {
@@ -31,7 +37,7 @@ def simple_sentence_split(text):
 
 def query_openrouter_json(system_prompt, user_prompt):
     """
-    Queries OpenRouter. Removed strict JSON mode enforcement to fix 400 error.
+    Queries OpenRouter with automatic failover to backup models.
     """
     if not OPENROUTER_API_KEY:
         print("⚠️ OPENROUTER_API_KEY is missing.")
@@ -43,49 +49,48 @@ def query_openrouter_json(system_prompt, user_prompt):
         "HTTP-Referer": OPENROUTER_REFERER_URL or "https://smartmail-bot.onrender.com"
     }
     
-    print(f"🤖 Using Model: {OPENROUTER_MODEL}") 
-
-    # Combined prompt for models that don't support 'system' role well
+    # Combine prompts once to use for all models
     combined_prompt = f"{system_prompt}\n\n---\n\nTask Context:\n{user_prompt}"
 
-    payload = {
-        "model": OPENROUTER_MODEL, 
-        "messages": [
-            {"role": "user", "content": combined_prompt}
-        ],
-        "temperature": 0.3, 
-        "max_tokens": 300,
-        # REMOVED: "response_format": { "type": "json_object" } 
-        # This caused the 400 error on Gemma 3n
-    }
-    
-    try:
-        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=45)
+    # Loop through our list of free models
+    for model_id in FREE_MODEL_LIST:
+        print(f"🤖 Trying Model: {model_id}")
         
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('choices'):
-                content = data['choices'][0]['message']['content'].strip()
-                # Clean up markdown code blocks if the model adds them
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.replace("```", "").strip()
-                return content
+        payload = {
+            "model": model_id, 
+            "messages": [{"role": "user", "content": combined_prompt}],
+            "temperature": 0.3, 
+            "max_tokens": 300
+        }
         
-        print(f"❌ OpenRouter Error ({response.status_code}): {response.text}")
-        return None
-        
-    except Exception as e:
-        print(f"❌ Connection Error: {e}")
-        return None
+        try:
+            # 20s timeout is enough for these fast models
+            response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=20)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('choices'):
+                    content = data['choices'][0]['message']['content'].strip()
+                    # Clean up markdown code blocks
+                    if "```json" in content:
+                        content = content.split("```json")[1].split("```")[0].strip()
+                    elif "```" in content:
+                        content = content.replace("```", "").strip()
+                    return content
+            
+            # If we get a rate limit (429) or server error (5xx), log it and loop to the next model
+            print(f"⚠️ Model {model_id} Failed ({response.status_code}). Switching to backup...")
+            
+        except Exception as e:
+            print(f"❌ Connection Error on {model_id}: {e}")
+            continue # Try next model
+
+    print("❌ All models failed.")
+    return None
 
 # --- MAIN AI LOGIC ---
 
 def analyze_text(text):
-    """
-    Sends the text to AI to determine Summary, Tone, Urgency, and Draft in ONE go.
-    """
     if not text or len(text.strip()) < 5:
         return {
             "summary": "No content.", "tone": "Neutral", "urgency": "Low", 
@@ -103,11 +108,11 @@ def analyze_text(text):
         "key_points": ["List of 1-3 key action items or important details"],
         "suggested_reply": "A concise, professional response (under 75 words) signed off as 'Support Team'"
     }
-    IMPORTANT: Output ONLY the raw JSON. Do not use Markdown formatting."""
+    IMPORTANT: Output ONLY the raw JSON. Do not include markdown formatting."""
 
     user_prompt = f"Analyze this email content:\n\n{clean_text}"
 
-    # Call AI
+    # Call AI with Failover
     result_json_str = query_openrouter_json(system_prompt, user_prompt)
 
     # Default Safe Values
@@ -122,6 +127,14 @@ def analyze_text(text):
     # Parse AI Response
     if result_json_str:
         try:
+            # Clean up any thinking tags (DeepSeek artifact) just in case we fallback to a thinking model
+            result_json_str = re.sub(r'<think>.*?</think>', '', result_json_str, flags=re.DOTALL).strip()
+            
+            # Find the JSON object if there is extra text around it
+            json_match = re.search(r'\{.*\}', result_json_str, re.DOTALL)
+            if json_match:
+                result_json_str = json_match.group(0)
+
             parsed = json.loads(result_json_str)
             result["summary"] = parsed.get("summary", "No summary")
             result["tone"] = parsed.get("tone", "Neutral")
@@ -131,6 +144,6 @@ def analyze_text(text):
         except json.JSONDecodeError:
             print(f"⚠️ Failed to parse JSON from AI: {result_json_str}")
             result["summary"] = "AI format error"
-            result["suggested_reply"] = result_json_str[:200] # Show raw output for debugging
+            result["suggested_reply"] = result_json_str[:200]
 
     return result

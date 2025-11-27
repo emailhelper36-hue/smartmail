@@ -2,34 +2,30 @@ import os
 import requests
 import re
 import time
+import json
 
 # --- CONFIGURATION ---
+# Hugging Face (Used for stable Bart Summary only)
 HF_TOKEN = os.environ.get("HF_TOKEN")
-# Changed to the stable Inference API base
 API_BASE_INF = "https://api-inference.huggingface.co/models"
+API_URL_SUM = f"{API_BASE_INF}/facebook/bart-large-cnn" 
 
-# 1. Summarization (Stable)
-API_URL_SUM = f"{API_BASE_INF}/facebook/bart-large-cnn"
-# 2. Sentiment (Stable)
-API_URL_TONE = f"{API_BASE_INF}/cardiffnlp/twitter-roberta-base-sentiment-latest"
-# 3. AI Reply Generation (SWITCHED TO FAST, STABLE GEMMA MODEL)
-API_URL_GEN = f"{API_BASE_INF}/google/gemma-2b-it" 
+# --- OPENROUTER CONFIG ---
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions" 
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+# Using the specific 20B GPT-OSS model for high quality
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-oss-20b:free") 
+OPENROUTER_REFERER_URL = os.environ.get("OPENROUTER_REFERER_URL") 
 
-# --- KEYWORDS ---
-URGENT_KEYWORDS = [
-    "urgent", "emergency", "critical", "asap", "immediately", 
-    "deadline", "breach", "act now", "within 24 hours", "account locked"
-]
+# --- LOCAL KEYWORDS & WEIGHTS ---
+URGENCY_WEIGHTS = {
+    "urgent": 3, "emergency": 4, "critical": 3, "asap": 2, 
+    "immediately": 2, "deadline": 2, "breach": 4, "act now": 3
+}
 
-TONE_KEYWORDS = {
-    "angry": [
-        "angry", "frustrated", "disappointed", "unacceptable", "terrible", 
-        "worst", "hate", "complaint", "fail", "poor", "ridiculous", "scam"
-    ],
-    "positive": [
-        "thank", "appreciate", "great", "excellent", "good", "happy", 
-        "pleased", "wonderful", "love", "impressed", "outstanding", "kudos"
-    ]
+TONE_WEIGHTS = {
+    "negative": {"unacceptable": 3, "frustrated": 2, "worst": 3, "fail": 2, "complaint": 1},
+    "positive": {"thank": 2, "appreciate": 2, "excellent": 3, "great": 2, "outstanding": 3, "love": 1}
 }
 
 # --- HELPER FUNCTIONS ---
@@ -42,41 +38,74 @@ def first_n_sentences(text, n=2):
     sentences = simple_sentence_split(text)
     return " ".join(sentences[:n])
 
-def query_hf_api(payload, api_url, retries=1, timeout=40):
-    """
-    Robust API Query with increased retries and timeout for free tier stability.
-    """
-    if not HF_TOKEN:
-        print("⚠️ HF_TOKEN missing")
-        return None
-        
+def query_hf_api(payload, api_url, retries=1, timeout=20):
+    """Robust API Query for Bart/Summary (Stable)."""
+    if not HF_TOKEN: return None
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
     for attempt in range(retries + 1):
         try:
-            # Use specified timeout
             response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
-            
             if response.status_code == 200:
                 return response.json()
-            
-            # 503 (Model Loading) Handling
             if response.status_code == 503:
                 data = response.json()
                 wait_time = data.get("estimated_time", 15)
-                print(f"⏳ Model loading... Waiting {wait_time:.1f}s (Attempt {attempt+1})")
                 time.sleep(wait_time) 
                 continue 
-            
-            # Log the fast failure status code (e.g., 404, 401, or 410)
-            print(f"❌ Fast API Failure ({response.status_code}): Check endpoint or token.")
             return None
-            
-        except requests.exceptions.Timeout:
-            pass
         except Exception:
             pass
-            
+    return None
+
+def query_openrouter_api(tone, urgency, summary):
+    """
+    Calls OpenRouter API for dynamic reply generation.
+    """
+    if not OPENROUTER_API_KEY or not OPENROUTER_MODEL:
+        return None
+
+    instruction = "Write a professional, concise email reply."
+    if tone == "Positive": instruction = "Write a warm thank-you email acknowledging positive feedback."
+    elif tone == "Negative": instruction = "Write an empathetic apology and address the frustration."
+    elif urgency == "High" or tone == "Urgent": instruction = "Write a reassuring email stating the issue is prioritized immediately."
+    
+    # Prepare the prompt for the model
+    system_prompt = "You are a highly efficient customer support agent. Your reply must be EXTREMELY BRIEF (MAX 4 SENTENCES) and sign off as 'Support Team'."
+    user_prompt = f"Task: {instruction}\nSummary of Email: '{summary}'"
+    
+    payload = {
+        "model": OPENROUTER_MODEL, 
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 80, 
+        "stream": False 
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": OPENROUTER_REFERER_URL or "https://smartmail-bot.onrender.com"
+    }
+    
+    try:
+        # Use short timeout as OpenRouter is fast
+        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=20) 
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('choices'):
+                text = data['choices'][0]['message']['content']
+                return text.strip()
+        
+        # Log error for debugging if the call fails instantly
+        print(f"❌ OpenRouter API Failed ({response.status_code}): {response.text}")
+        
+    except Exception as e:
+        print(f"❌ OpenRouter Connection Error: {e}")
+
     return None
 
 # --- ANALYSIS LOGIC ---
@@ -84,46 +113,38 @@ def query_hf_api(payload, api_url, retries=1, timeout=40):
 def get_summary(text):
     if len(text) < 50: return text.strip()
     result = query_hf_api({"inputs": text[:1500]}, API_URL_SUM, retries=1)
-    
     if result and isinstance(result, list) and 'summary_text' in result[0]:
         return result[0]['summary_text'].strip()
-        
     return first_n_sentences(text, 2)
 
-def get_tone_urgency(text):
+def get_tone_urgency_local(text):
     text_lower = text.lower()
     
     # 1. URGENCY
-    urgency = "Low"
-    for w in URGENT_KEYWORDS:
-        if re.search(rf"\b{re.escape(w)}\b", text_lower):
-            urgency = "High"
-            break
-            
-    # 2. TONE (Hybrid)
-    tone = "Neutral"
-    neg_count = sum(1 for w in TONE_KEYWORDS["angry"] if re.search(rf"\b{re.escape(w)}\b", text_lower))
-    pos_count = sum(1 for w in TONE_KEYWORDS["positive"] if re.search(rf"\b{re.escape(w)}\b", text_lower))
+    urgency_score = 0
+    for keyword, weight in URGENCY_WEIGHTS.items():
+        if re.search(rf"\b{re.escape(keyword)}\b", text_lower):
+            urgency_score += weight
     
-    keyword_tone = None
-    if neg_count > 0 and neg_count > pos_count: keyword_tone = "Negative"
-    elif pos_count > 0 and pos_count > neg_count: keyword_tone = "Positive"
+    urgency = "Low"
+    if urgency_score >= 5: urgency = "High"
+    elif urgency_score >= 2: urgency = "Medium"
 
-    # AI Check
-    ai_tone = None
-    result = query_hf_api({"inputs": text[:512]}, API_URL_TONE, retries=1)
-    if result and isinstance(result, list) and isinstance(result[0], list):
-        scores = result[0]
-        top = max(scores, key=lambda x: x['score'])
-        label = top['label'].lower()
-        if label == 'negative': ai_tone = "Negative"
-        elif label == 'positive': ai_tone = "Positive"
-        else: ai_tone = "Neutral"
+    # 2. TONE (Local Scoring)
+    tone_score = 0
+    for keyword, weight in TONE_WEIGHTS["positive"].items():
+        if re.search(rf"\b{re.escape(keyword)}\b", text_lower):
+            tone_score += weight
+    for keyword, weight in TONE_WEIGHTS["negative"].items():
+        if re.search(rf"\b{re.escape(keyword)}\b", text_lower):
+            tone_score -= weight
 
-    if keyword_tone: tone = keyword_tone
-    elif ai_tone: tone = ai_tone
-        
-    if urgency == "High" and tone == "Neutral": tone = "Urgent"
+    tone = "Neutral"
+    if tone_score >= 3: tone = "Positive"
+    elif tone_score <= -3: tone = "Negative"
+    
+    if urgency == "High" and tone == "Neutral":
+        tone = "Urgent"
 
     return tone, urgency
 
@@ -139,50 +160,20 @@ def extract_key_points(text):
                 key_points.append(f"{prefix}{clean}")
     return key_points[:3]
 
+
 def generate_reply(tone, urgency, summary):
     """
-    Tries AI Generation with stable Llama-2 model.
+    Tries OpenRouter Generation first. If it fails, returns an error message.
     """
     
-    # --- 1. AI GENERATION ATTEMPT ---
-    instruction = "Write a polite customer support email reply."
-    if tone == "Positive": instruction = "Write a warm 'Thank You' email acknowledging positive feedback."
-    elif tone == "Negative": instruction = "Write an empathetic apology email addressing frustration."
-    elif urgency == "High" or tone == "Urgent": instruction = "Write a reassuring email regarding the urgent issue. State that it is prioritized."
-    
-    # Gemma/Llama Prompt Format 
-    # System prompt is now clearer for better instruction following
-    prompt = f"<|im_start|>system\nYou are a helpful customer support agent. Your goal is to write a professional email reply based on the summary and sentiment provided. Keep the reply concise (max 75 words). Sign off as 'Support Team'.\n<|im_end|>\n<|im_start|>user\nSummary: '{summary}'\nSentiment: {tone}\nTask: {instruction}\n<|im_end|>\n<|im_start|>assistant|>"
-    
-    # Try AI with 120s timeout and 3 retries
-    result = query_hf_api({
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 200, 
-            "return_full_text": False, 
-            "temperature": 0.7,
-            "top_p": 0.9
-        }
-    }, API_URL_GEN, retries=3, timeout=120) 
+    # --- 1. OPENROUTER GENERATION ATTEMPT ---
+    ai_response = query_openrouter_api(tone, urgency, summary)
 
-    if result and isinstance(result, list) and 'generated_text' in result[0]:
-        # Clean up the response format
-        raw_text = result[0]['generated_text'].strip()
-        # Gemma/Llama models sometimes repeat the prompt; we filter that out.
-        if raw_text.startswith(prompt):
-            raw_text = raw_text[len(prompt):].strip()
-        
-        return raw_text
+    if ai_response:
+        return ai_response
     
-    # --- 2. TEMPLATE FALLBACK ---
-    if tone == "Positive":
-        return "Thank you so much for your kind words! We are thrilled to hear your feedback and have shared it with the entire team. Thanks for being a great customer!\n\nBest regards,\nSupport Team"
-    elif tone == "Negative":
-        return "We sincerely apologize for the experience you have had. This is not the standard we strive for. We are investigating this matter immediately.\n\nBest regards,\nSupport Team"
-    elif urgency == "High" or tone == "Urgent":
-        return "We have received your urgent request. Our team has been notified and is prioritizing your case. Expect an update very soon.\n\nBest regards,\nSupport Team"
-    
-    return f"Thank you for your email, which we summarized as: '{summary}'. We have received your message and will respond to your inquiry shortly.\n\nBest regards,\nSupport Team"
+    # --- 2. FAIL SAFELY (NO FALLBACK TEMPLATE) ---
+    return "AI Generator Unavailable: Please check API Key or OpenRouter status."
 
 
 # --- MAIN FUNCTION ---
@@ -196,7 +187,7 @@ def analyze_text(text):
     clean_text = " ".join(text.split())[:2500]
     
     summary = get_summary(clean_text)
-    tone, urgency = get_tone_urgency(clean_text)
+    tone, urgency = get_tone_urgency_local(clean_text)
     reply = generate_reply(tone, urgency, summary)
     key_points = extract_key_points(clean_text)
     

@@ -8,8 +8,26 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_REFERER_URL = os.environ.get("OPENROUTER_REFERER_URL")
 
-# Set the model you requested as the default
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "google/gemma-3n-e4b-it:free")
+# Force the correct model ID as default if ENV is missing or wrong
+DEFAULT_MODEL = "google/gemma-3n-e4b-it:free"
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
+
+# --- LOCAL KEYWORDS & WEIGHTS ---
+URGENCY_WEIGHTS = {
+    "urgent": 3, "emergency": 4, "critical": 3, "asap": 2, 
+    "immediately": 2, "deadline": 2, "breach": 4, "act now": 3
+}
+
+TONE_WEIGHTS = {
+    "negative": {"unacceptable": 3, "frustrated": 2, "worst": 3, "fail": 2, "complaint": 1},
+    "positive": {"thank": 2, "appreciate": 2, "excellent": 3, "great": 2, "outstanding": 3, "love": 1}
+}
+
+# --- HELPER FUNCTIONS ---
+def simple_sentence_split(text):
+    if not text: return []
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if s.strip()]
 
 def query_openrouter_json(system_prompt, user_prompt):
     """
@@ -25,15 +43,19 @@ def query_openrouter_json(system_prompt, user_prompt):
         "HTTP-Referer": OPENROUTER_REFERER_URL or "https://smartmail-bot.onrender.com"
     }
     
+    print(f"🤖 Using Model: {OPENROUTER_MODEL}") # Debug log to confirm model
+
+    # FIX: Combine System and User prompts because Gemma 3n throws 400 Error on 'system' role
+    combined_prompt = f"{system_prompt}\n\n---\n\nTask Context:\n{user_prompt}"
+
     payload = {
         "model": OPENROUTER_MODEL, 
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": combined_prompt}
         ],
-        "temperature": 0.3, # Lower temperature for consistent, structured output
+        "temperature": 0.3, 
         "max_tokens": 300,
-        "response_format": { "type": "json_object" } # Force JSON if model supports it, otherwise prompt handles it
+        "response_format": { "type": "json_object" } 
     }
     
     try:
@@ -43,7 +65,6 @@ def query_openrouter_json(system_prompt, user_prompt):
             data = response.json()
             if data.get('choices'):
                 content = data['choices'][0]['message']['content'].strip()
-                # Clean up potential markdown code blocks if the model adds them
                 if content.startswith("```json"):
                     content = content.replace("```json", "").replace("```", "")
                 return content
@@ -67,9 +88,8 @@ def analyze_text(text):
             "suggested_reply": "Please provide content.", "key_points": []
         }
 
-    clean_text = text[:2500] # Truncate to safe limit
+    clean_text = text[:2500] 
 
-    # The "One Prompt to Rule Them All"
     system_prompt = """You are an expert email analysis AI. 
     Analyze the incoming email and return a valid JSON object with these exact keys:
     {
@@ -106,7 +126,6 @@ def analyze_text(text):
             result["key_points"] = parsed.get("key_points", [])
         except json.JSONDecodeError:
             print(f"⚠️ Failed to parse JSON from AI: {result_json_str}")
-            # If JSON parsing fails, dump the raw text into summary so you see what happened
             result["summary"] = "AI format error"
             result["suggested_reply"] = result_json_str[:200]
 

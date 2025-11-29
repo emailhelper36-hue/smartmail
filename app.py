@@ -90,7 +90,12 @@ def webhook():
             emails = zoho_service.fetch_latest_emails(limit=5)
             suggestions = [e['subject'] for e in emails]
             return jsonify({
-                "replies": [{"text": "👋 **Hello!** Select an email to analyze:"}],
+                "replies": [
+                    {"text": "👋 **Instructions to Test:**"},
+                    {"text": "1. Send an email to: `91-8610321023450@zohomail.com`"},
+                    {"text": "2. Wait 15-20 seconds for it to arrive."},
+                    {"text": "3. Restart (or type 'Hi') to see it in the list below:"}
+                ],
                 "suggestions": suggestions
             })
 
